@@ -12,6 +12,8 @@
 #define _FCNTL_H
 #include <bits/fcntl.h>
 
+#define MAXPATHLEN 256
+#define MAXFILEBUFFLEN 2048
 
 //extern int errorno;
 
@@ -55,11 +57,97 @@ void __print_escaped(FILE *fh ,const char *s){
 	for(;(*s)!=0; s++) {
 		if(*s==' ')
 		  fprintf(fh,"\\ ");
+		if(*s==',')
+		  fprintf(fh,"\\,");
+		else if(*s=='\r')
+		  fprintf(fh,"\\r");
+		else if(*s=='\n')
+		  fprintf(fh,"\\n");
 		else if(*s=='\\')
 		  fprintf(fh,"\\\\");
 		else
 		  fprintf(fh,"%c", *s);
 	}
+}
+
+/*
+ * Get a pid of the parent proccess
+ * Parse the /proc/pid/stat
+ * We need a first number after last ')' character
+*/
+pid_t __getparentpid(pid_t pid){
+  char filename[MAXPATHLEN];
+  snprintf(filename,MAXPATHLEN, "/proc/%d/stat",pid);
+  FILE *stat_file_handle=fopen(filename,"r");
+  if(stat_file_handle==NULL) {
+	fprintf(log_file_handle,"NULL");
+	return 0;
+  }
+  
+  char filedata[MAXFILEBUFFLEN];
+  size_t bytes_readed=fread(filedata,sizeof(char),MAXFILEBUFFLEN,stat_file_handle);
+  if(bytes_readed==0 || bytes_readed>=MAXFILEBUFFLEN) {
+	fprintf(log_file_handle,"NULL");
+	fclose(stat_file_handle);
+	return 0;	
+  }
+  
+  filedata[bytes_readed]=0;
+  
+  char *beg_scan_offset=rindex(filedata,')');
+  if(beg_scan_offset==NULL) {
+	fprintf(log_file_handle,"NULL");
+	fclose(stat_file_handle);
+	return 0;	
+  }
+  
+  pid_t parent_pid;
+  int tokens_readed=sscanf(beg_scan_offset,") %*c %d",&parent_pid);
+  if(tokens_readed!=1) {
+	fprintf(log_file_handle,"NULL");
+	fclose(stat_file_handle);
+	return 0;
+  }
+  fclose(stat_file_handle);
+  
+  if(pid==1)
+	return 0; // set this explicitly. 
+	//           I am not sure that ppid of init proccess is always 0
+  
+  return parent_pid;
+}
+
+/*
+ * Print cmdline of proccess(escaped)
+*/
+void __print_cmdline(pid_t pid) {
+  char filename[MAXPATHLEN];
+  snprintf(filename,MAXPATHLEN, "/proc/%d/cmdline",pid);
+  FILE *cmdline_file_handle=fopen(filename,"r");
+  if(cmdline_file_handle==NULL) {
+	fprintf(log_file_handle,"UNKNOWN");
+	return;
+  }
+  
+  char read_buffer[MAXFILEBUFFLEN+1]={0};
+  int readed;
+  do {
+	readed=fread(read_buffer,sizeof(char),MAXFILEBUFFLEN,cmdline_file_handle);
+	char *last_printed=read_buffer;
+	int i;
+	for(i=0; i<readed; i++) {
+	    if(read_buffer[i]==0) {
+		  __print_escaped(log_file_handle,last_printed);
+		  fprintf(log_file_handle,"\\0");
+		  last_printed=read_buffer+i+1;
+		}
+	}
+	read_buffer[readed]=0;
+	if(last_printed<read_buffer+readed)
+	  __print_escaped(log_file_handle,last_printed); // print rest of buffer
+
+  } while(readed==MAXFILEBUFFLEN);
+  fclose(cmdline_file_handle);
 }
 
 /*
@@ -72,9 +160,16 @@ void __hook_log(const char *event_type, const char *filename,int flags, int resu
   __print_escaped(log_file_handle, event_type);
   fprintf(log_file_handle," ");
   __print_escaped(log_file_handle, filename);
-  fprintf(log_file_handle," %d %d %d", flags, result, err);
+  fprintf(log_file_handle," %d %d %d ", flags, result, err);
   // TODO: add a parent processes in output
-  
+  pid_t pid;
+  __getparentpid(getpid());
+  for(pid=getpid();pid!=0;pid=__getparentpid(pid)){
+	__print_cmdline(pid);
+	if(pid!=1)
+	  fprintf(log_file_handle,",");
+	
+  }
   
   fprintf(log_file_handle,"\n");
 }
