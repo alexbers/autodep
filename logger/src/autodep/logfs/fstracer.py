@@ -7,72 +7,22 @@ import os
 import time
 import tempfile
 import socket
-import asyncore
-
-class socket_selecter(asyncore.dispatcher):
-  connects=0;
-  
-  def __init__(self,path):
-	asyncore.dispatcher.__init__(self)
-	self.path=path
-	self.create_socket(socket.AF_UNIX, socket.SOCK_STREAM)
-	self.set_reuse_addr()
-	self.bind(self.path)
-	self.listen(128)
-	
-  def handle_accept(self):
-	ret = self.accept()
-	if ret is None:
-	  pass
-	else:
-	  (sock,addr)=ret
-	  print "Client accepted\n"
-	  self.connects+=1
-	  handler = log_handler(sock,addr,self)
-	  print "After client accepted connects=%s\n" % self.connects
-
-
-class log_handler(asyncore.dispatcher_with_send):
-
-  def __init__(self, sock, addr,listen_socket_dispatcher):
-	asyncore.dispatcher_with_send.__init__(self, sock)
-	self.addr = addr
-	self.buffer = ''
-	self.listen_sock_dispatcher=listen_socket_dispatcher
-
-  def handle_read(self):
-	print self.recv(8192)
-
-  def writable(self):
-	return (len(self.buffer) > 0)
-
-  def handle_write(self):
-	pass
-	#self.send(self.buffer)
-	#self.buffer = ''
-
-  def handle_close(self):
-	print "Client closed the socket\n"
-	self.listen_sock_dispatcher.connects-=1
-	if self.listen_sock_dispatcher.connects == 0:
-	  #pass
-	  self.listen_sock_dispatcher.close()
-	self.close()
-	
-
+import select
 
 
 # run the program and get file access events
 def getfsevents(prog_name,arguments):
-  # generating a random socketname
+  # generate a random socketname
   tmpdir = tempfile.mkdtemp()
   socketname = os.path.join(tmpdir, 'socket')
 
   try:
-	pass
-    #os.mkfifo(fifoname)
-  except OSError, e:
-    print "Failed to create a socket for exchange data with logger: %s" % e
+	sock_listen=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+	sock_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+	sock_listen.bind(socketname)
+	sock_listen.listen(1024)
+  except socket.error, e:
+    print "Failed to create a socket for exchange data with the logger: %s" % e
     return ()
   else:
 	print socketname
@@ -84,18 +34,34 @@ def getfsevents(prog_name,arguments):
 		"LD_PRELOAD":"/home/bay/gsoc/logger/src/hook_lib/file_hook.so",
 		"LOG_SOCKET":socketname
 	  })
+	  print "Failed to launch the programm"
 	  os.exit(0)
 	else:
-	  server = socket_selecter(socketname)
-	  #fifo = open(fifoname, 'r')
+	  input = [sock_listen]
+	  connects = 0;
 	  
-	  try:
-		asyncore.loop()
-	  finally:
-		if os.path.exists(server.path):
-		  os.unlink(server.path)
-		os.wait()
-	  
-	  pass
-	
+	  while input:
+		inputready,outputready,exceptready = select.select(input,[],[])
+		
+		for s in inputready:
+		  if s == sock_listen:
+			ret = s.accept()
+			if ret is None:
+			  pass
+			else:
+			  (client,addr)=ret
+			  print "Client accepted\n";
+			  connects+=1;
+			  input.append(client)
+		  else:
+			data = s.recv(8192)
+			if data:
+			  print data
+			else:
+			  s.close()
+			  input.remove(s)
+			  connects-=1;
+			  if connects==0:
+				input.remove(sock_listen)		
+	  os.wait()
 	
