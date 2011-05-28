@@ -24,18 +24,20 @@
 int (*_open)(const char * pathname, int flags, ...);
 int (*_open64)(const char * pathname, int flags, ...);
 int (*_execve)(const char *filename, char *const argv[],char *const envp[]);
+pid_t (*_fork)();
 
 FILE *log_file_handle; // one of these two vars will be used for logging
 int log_socket=-1;
 
 int is_log_into_socket=0;
 
-void _init() {
+void __doinit(){
   _open = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open");
   _open64 = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open64");
   _execve = (int (*)(const char *filename, char *const argv[],char *const envp[])) dlsym(RTLD_NEXT, "execve");
+  _fork = (pid_t (*)()) dlsym(RTLD_NEXT, "fork");
 
-  if(_open==NULL || _open64==NULL || execve==NULL) {
+  if(_open==NULL || _open64==NULL || execve==NULL || _fork==NULL) {
 	  fprintf(stderr,"Failed to load original functions of hook\n");
 	  exit(1);
   }
@@ -55,7 +57,7 @@ void _init() {
 	  exit(1);
 	}
 	
-	fprintf(stderr,"Using a socket for logging: %s\n",log_socket_name);
+	//fprintf(stderr,"Using a socket for logging: %s\n",log_socket_name);
 	
 	log_socket=socket(AF_UNIX, SOCK_STREAM, 0);
 	if(log_socket==-1) {
@@ -80,17 +82,25 @@ void _init() {
 	  fprintf(stderr,"Unable to open a socket for a steam writing: %s\n", strerror(errno));
 	  exit(1);
 	}
-  }
-} 
+  }  
+}
 
-void _fini() {
+void __dofini() {
   fflush(log_file_handle);
   fclose(log_file_handle);
 
   if(is_log_into_socket)
 	close(log_socket); 
   
-  //fprintf(stderr,"All sockets closed\n");
+  //fprintf(stderr,"All sockets closed\n");  
+}
+
+void _init() {
+  __doinit();
+} 
+
+void _fini() {
+  __dofini();
 }
 
 /*
@@ -101,7 +111,7 @@ void __print_escaped(FILE *fh ,const char *s){
 	for(;(*s)!=0; s++) {
 		if(*s==' ')
 		  fprintf(fh,"\\ ");
-		if(*s==',')
+		else if(*s==',')
 		  fprintf(fh,"\\,");
 		else if(*s=='\r')
 		  fprintf(fh,"\\r");
@@ -255,6 +265,18 @@ int execve(const char *filename, char *const argv[],
   __hook_log("execve",filename,"todo",0);
 
   int ret=_execve(filename, argv, envp);
+  
+  return ret;
+}
+
+pid_t fork(void) {
+  int ret=_fork();
+  // we must to handle fork for reconnect a socket
+
+  if(ret==0) {
+	__dofini(); // reinit connection for clildren
+	__doinit(); // because now it is different processes
+  }
   
   return ret;
 }
