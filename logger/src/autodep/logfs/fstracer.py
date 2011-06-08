@@ -44,9 +44,12 @@ def checkfinished(pid):
 	return (False,0)
   return (True,exitcode)
   
+# default access filter. Allow always  
+def defaultfilter(time, filename, pid):
+  return True
 
 # run the program and get file access events
-def getfsevents(prog_name,arguments,approach="hooklib"):
+def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter):
   events=[]
   # generate a random socketname
   tmpdir = tempfile.mkdtemp()
@@ -127,8 +130,17 @@ def getfsevents(prog_name,arguments,approach="hooklib"):
 			  #print "!"+"%d"%len(record)+"?"
 			  #print "datalen: %d" % len(data)
 			  message=parse_message(record)
+			  
 			  try:
-				events.append([message[1],message[2]]);
+				if message[4]=="ASKING":
+				  if filterproc(message[1],message[2],message[3]):
+					s.sendall("ALLOW\n"); # TODO: think about flush here
+				  else:
+					print "Blocking an access to %s" % message[2]
+					s.sendall("DENY\n"); # TODO: think about flush here
+					
+				else:
+				  events.append([message[1],message[2]]);
 			  except IndexError:
 				print "IndexError while parsing %s"%record
 			  #print "!!"+data+"!!"

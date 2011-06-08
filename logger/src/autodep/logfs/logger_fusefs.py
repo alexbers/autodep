@@ -10,8 +10,8 @@ class logger:
   socketname=''
   readytolaunch=False
   mountlist=["/dev/","/proc/","/sys/"]
-#  rootmountpath="/mnt/logfs_root_"+str(time.time())+"/"
-  rootmountpath="/mnt/logfs_roott_"+"/"
+  rootmountpath="/mnt/logfs_root_"+str(time.time())+"/"
+#  rootmountpath="/mnt/logfs_roott_"+"/"
   
   def __init__(self, socketname):
 	self.socketname=socketname
@@ -22,16 +22,16 @@ class logger:
 	
 	print "mounting root filesystem into %s. Please, DON'T DELETE THIS FOLDER!!" % self.rootmountpath
 	
-	for mount in self.mountlist:
-	  try:
-		os.makedirs(self.rootmountpath+mount)
-	  except OSError,e:
-		if e.errno==17: # 17 is a "file exists" errno
-		  pass			# all is ok
-		else:
-		  print "failed to make mount directory %s: %s" % (self.rootmountpath+mount,e)
-		  print "this error is fatal"
-		  exit(1)
+	#for mount in self.mountlist:
+	try:
+	  os.mkdir(self.rootmountpath)
+	except OSError,e:
+	  if e.errno==17: # 17 is a "file exists" errno
+		pass			# all is ok
+	  else:
+		print "failed to make mount directory %s: %s" % (self.rootmountpath,e)
+		print "this error is fatal"
+		exit(1)
 		  
 	ret=subprocess.call(['mount','-o','bind','/',self.rootmountpath])
 	if ret!=0:
@@ -90,6 +90,7 @@ class logger:
 		ret=subprocess.call(['umount',self.rootmountpath]);
 		if ret!=0:
 		  print "Error while unmounting %s Check messages above" % (self.rootmountpath)
+		os.rmdir(self.rootmountpath)
 
 	  except OSError, e:
 		print "Error while unmounting fuse filesystem: %s" % e

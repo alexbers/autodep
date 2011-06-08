@@ -11,6 +11,6 @@ if len(sys.argv)<2:
   print "Usage: showfsevents.py <command>"
   exit(1)
   
-events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:])
+events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:],approach="fusefs")
 print events
 #logfs.fstracer.getfsevents("emerge", ["emerge","--info"])

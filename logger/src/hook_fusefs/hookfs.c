@@ -77,45 +77,63 @@ void __print_escaped(FILE *fh ,const char *s){
 /*
  * Format of log string: time event file flags result parents
 */
-void log_event(const char *event_type, const char *filename, int result, int err, pid_t pid) {
+void log_event(const char *event_type, const char *filename, char *result, int err, pid_t pid) {
 
   fprintf(log_file,"%lld ",(unsigned long long)time(NULL));
 
   __print_escaped(log_file, event_type);
   fprintf(log_file," ");
   __print_escaped(log_file, filename);
-  fprintf(log_file," %d %d %d\n", result, err, pid);
+  fprintf(log_file," %d %s\n", pid, result);
   fflush(log_file);
 }
 
+/*
+ * Ack a python part about an event
+ * Returns 1 if access is allowed and 0 if denied
+*/
+int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
+  // sending asking log_event
+  log_event(event_type,filename,"ASKING",0,pid);
+  char answer[8];
+  fscanf(log_file,"%7s",answer);
+  
+  if(strcmp(answer,"ALLOW")==0)
+	return 1;
+  else if(strcmp(answer,"DENY")==0)
+	return 0;
+  else
+	fprintf(stderr,"Protocol error, text should be ALLOW or DENY, got: %s",answer);
+  return 0;
+}
 
 static int post_getattr(const char *path, int res) {
 	struct fuse_context * context = fuse_get_context();
-	log_event("stat",path,res,errno,context->pid);
+	log_event("stat",path,"OK",errno,context->pid);
 	return 0;
 }
 
 static int post_read(const char *path, int res) {
 	struct fuse_context * context = fuse_get_context();
-	log_event("read",path,res,errno,context->pid);
+	log_event("read",path,"OK",errno,context->pid);
 	return 0;
 }
 
 static int post_write(const char *path, int res) {
 	struct fuse_context * context = fuse_get_context();
-	log_event("write",path,res,errno,context->pid);
+	log_event("write",path,"OK",errno,context->pid);
 	return 0;
 }
 
 static int post_open(const char *path, int fd) {
 	struct fuse_context * context = fuse_get_context();
-	log_event("open",path,fd,errno,context->pid);
+	log_event("open",path,"OK",errno,context->pid);
 	return 0;
 }
 
 static int post_truncate(const char *path, int res) {
 	struct fuse_context * context = fuse_get_context();
-	log_event("write",path,res,errno,context->pid);
+	log_event("write",path,"OK",errno,context->pid);
 	return 0;
 }
 
@@ -579,6 +597,14 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 	int fd;
 	char * rel_path = NULL;
 
+	struct fuse_context * context = fuse_get_context();
+
+	
+	if(! is_event_allowed("open",path,context->pid)) {
+	  errno=2;
+	  return -errno;
+	}
+	
 	rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
@@ -939,7 +965,7 @@ int main(int argc, char *argv[]) {
 	  return 1;
 	}
 	
-	log_file=fdopen(log_socket,"r+");
+	log_file=fdopen(log_socket,"a+");
 	
 	if(log_file==NULL) {
 	  fprintf(stderr,"Unable to open a socket for a steam writing: %s\n", strerror(errno));
