@@ -36,6 +36,7 @@
 #endif
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <pthread.h>
 
 
 #define MIN(a, b)  (((a) < (b)) ? (a) : (b))
@@ -46,6 +47,8 @@ struct hookfs_config {
      int argv_debug;
 };
 
+
+pthread_mutex_t socketblock = PTHREAD_MUTEX_INITIALIZER;
 
 int mountpoint_fd = -1;
 char *mountpoint = NULL;
@@ -78,7 +81,9 @@ void __print_escaped(FILE *fh ,const char *s){
  * Format of log string: time event file flags result parents
 */
 void log_event(const char *event_type, const char *filename, char *result, int err, pid_t pid) {
+  pthread_mutex_lock( &socketblock );
 
+  
   fprintf(log_file,"%lld ",(unsigned long long)time(NULL));
 
   __print_escaped(log_file, event_type);
@@ -86,6 +91,9 @@ void log_event(const char *event_type, const char *filename, char *result, int e
   __print_escaped(log_file, filename);
   fprintf(log_file," %d %s\n", pid, result);
   fflush(log_file);
+
+  pthread_mutex_unlock( &socketblock );
+
 }
 
 /*
@@ -96,7 +104,10 @@ int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
   // sending asking log_event
   log_event(event_type,filename,"ASKING",0,pid);
   char answer[8];
+
+  pthread_mutex_lock( &socketblock );
   fscanf(log_file,"%7s",answer);
+  pthread_mutex_unlock( &socketblock );
   
   if(strcmp(answer,"ALLOW")==0)
 	return 1;

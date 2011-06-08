@@ -59,6 +59,18 @@ class logger:
 	#we will delete the object manually after execprog
 	pass
   
+  # launches command, if it returns not 0 waits for 1 second and launches again
+  # for various umounts
+  def smartcommandlauncher(self,args):
+	for waittime in (1,1,2):
+	  ret=subprocess.call(args)
+	  if ret==0:
+		return
+	  print "Auto-retrying after %d sec" % waittime
+	  time.sleep(waittime)
+	print "Giving up. Command %s failed" % args
+	
+  
   def execprog(self,prog_name,arguments):
 	pid=os.fork()
 	if pid==0:
@@ -78,18 +90,12 @@ class logger:
 	else:
 	  exitcode=os.wait()[1];
 	  try:
-		# unmount all manually
+		print "Unmounting partitions"
 		self.mountlist.reverse()
 		for mount in self.mountlist:
-		  ret=subprocess.call(['umount',self.rootmountpath+mount])
-		  if ret!=0:
-			print "failed to umount bind %s directory. Check messages above" % ( self.rootmountpath+mount)
-		ret=subprocess.call(['fusermount','-u',self.rootmountpath]);
-		if ret!=0:
-		  print "Error while unmounting fuse filesystem. Check messages above"
-		ret=subprocess.call(['umount',self.rootmountpath]);
-		if ret!=0:
-		  print "Error while unmounting %s Check messages above" % (self.rootmountpath)
+		  self.smartcommandlauncher(['umount',self.rootmountpath+mount])
+		self.smartcommandlauncher(['fusermount','-u',self.rootmountpath]);
+		self.smartcommandlauncher(['umount',self.rootmountpath]);
 		os.rmdir(self.rootmountpath)
 
 	  except OSError, e:
