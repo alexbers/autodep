@@ -13,13 +13,13 @@ class simple_tests(unittest.TestCase):
 	                ['/bin/cat','/etc/passwd']),
 	                [['open', '/etc/passwd']])
 
-  """
+  
   def test_open_many(self):
 	filesnum=200
 	self.assertEqual(fstracer.getfsevents('/bin/cat',
 	                ['/bin/cat']+map(lambda x: 'file'+str(x),range(0,filesnum))),
 	                map(lambda x: ['open','file'+str(x)],range(0,filesnum)))
-  """
+  
 
   def test_parralel(self):
 	filesnum=200

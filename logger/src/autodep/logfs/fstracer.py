@@ -11,6 +11,10 @@ import socket
 import select
 import re
 
+import logger_hooklib
+import logger_fusefs
+
+
 def unescape(s):
   s=re.sub(r'\\r', '\r', s)
   s=re.sub(r'\\n', '\n', s)
@@ -42,7 +46,7 @@ def checkfinished(pid):
   
 
 # run the program and get file access events
-def getfsevents(prog_name,arguments):
+def getfsevents(prog_name,arguments,approach="hooklib"):
   events=[]
   # generate a random socketname
   tmpdir = tempfile.mkdtemp()
@@ -60,16 +64,21 @@ def getfsevents(prog_name,arguments):
 	#print socketname
 	
 	pid=os.fork()
-	if pid==0: 
-	  # wait while the socket opens
-	  try:
-		os.execvpe(prog_name, arguments,{
-		  "LD_PRELOAD":"/home/bay/gsoc/logger/src/hook_lib/file_hook.so",
-		  "LOG_SOCKET":socketname
-		})
-	  except OSError, e:
-		print "Failed to launch the programm: %s" % e
+	if pid==0:
+	  logger=None
+	  if approach=="hooklib":
+		logger=logger_hooklib.logger(socketname)
+	  elif approach=="fusefs":
+		logger=logger_fusefs.logger(socketname)
+	  else:
+		print "Unknown logging approach"
 		sys.exit(1)
+	  
+	  logger.execprog(prog_name,arguments)
+	  
+	  # should not get here
+	  print "Launch likely was unsuccessful"
+	  sys.exit(1)
 	else:
 	  input = [sock_listen]
 	  connects = 0;
@@ -87,21 +96,18 @@ def getfsevents(prog_name,arguments):
 			  pass
 			else:
 			  (client,addr)=ret
-			  #print "Client accepted\n";
-			  connects+=1;
+			  connects+=1; # client accepted
 			  input.append(client)
 			  buffers[client]=''
 		  else:
 			data=s.recv(65536)
-			#print "Recv: %s" % data
-			#print "fileno:%d" % s.fileno()
 			
 			buffers[s]+=data
 			  
 			if not data:
 			  s.close()
 			  input.remove(s)
-			  #buffers[s]=""
+			  buffers[s]=""
 			  connects-=1;
 			  if connects==0:
 				input.remove(sock_listen)
@@ -130,7 +136,7 @@ def getfsevents(prog_name,arguments):
 
 		if len(input)==1 and connects==0:
 		  # seems like there is no connect
-		  print "It seems like a logger module was unabe to start." + \
+		  print "It seems like a logger module was unable to start." + \
 				"Check that you are not launching a suid program under non-root user."
 		  return []
 
