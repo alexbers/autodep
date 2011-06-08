@@ -80,20 +80,24 @@ void __print_escaped(FILE *fh ,const char *s){
 /*
  * Format of log string: time event file flags result parents
 */
-void log_event(const char *event_type, const char *filename, char *result, int err, pid_t pid) {
+void log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
   pthread_mutex_lock( &socketblock );
 
-  
   fprintf(log_file,"%lld ",(unsigned long long)time(NULL));
 
   __print_escaped(log_file, event_type);
   fprintf(log_file," ");
   __print_escaped(log_file, filename);
-  fprintf(log_file," %d %s\n", pid, result);
+  
+  fprintf(log_file," %d ", pid);
+  if(strcmp(result,"ERR")==0)
+	fprintf(log_file,"%s/%d",result,err);
+  else
+	fprintf(log_file,"%s",result);
+  fprintf(log_file,"\n");
   fflush(log_file);
 
   pthread_mutex_unlock( &socketblock );
-
 }
 
 /*
@@ -118,59 +122,6 @@ int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
   return 0;
 }
 
-static int post_getattr(const char *path, int res) {
-	struct fuse_context * context = fuse_get_context();
-	log_event("stat",path,"OK",errno,context->pid);
-	return 0;
-}
-
-static int post_read(const char *path, int res) {
-	struct fuse_context * context = fuse_get_context();
-	log_event("read",path,"OK",errno,context->pid);
-	return 0;
-}
-
-static int post_write(const char *path, int res) {
-	struct fuse_context * context = fuse_get_context();
-	log_event("write",path,"OK",errno,context->pid);
-	return 0;
-}
-
-static int post_open(const char *path, int fd) {
-	struct fuse_context * context = fuse_get_context();
-	log_event("open",path,"OK",errno,context->pid);
-	return 0;
-}
-
-static int post_truncate(const char *path, int res) {
-	struct fuse_context * context = fuse_get_context();
-	log_event("write",path,"OK",errno,context->pid);
-	return 0;
-}
-
-struct hook_operations {
-	int (*post_read)(const char *path, int res);
-	int (*post_write)(const char *path, int res);
-	int (*post_open)(const char *path, int fd);
-	//int (*post_rename)(const char *from, const char *to, int res);
-	int (*post_getattr)(const char *path, int res);
-	int (*post_truncate)(const char *path, int res);
-};
-
-static struct hook_operations hooks = {
-	.post_read = post_read,
-	.post_write = post_write,
-	.post_open = post_open,
-	//.post_unlink = post_unlink,
-	//.post_rename = post_rename,
-	.post_getattr = post_getattr,
-	.post_truncate = post_truncate,
-};
-
-#define NOTIFY(function, ...) \
-	if (hooks.function) { \
-		hooks.function(__VA_ARGS__); \
-	}
 
 static char * malloc_relative_path(const char *path) {
 	int len = strlen(path);
@@ -196,6 +147,8 @@ static void give_to_creator_path(const char *path) {
 
 static int hookfs_getattr(const char *path, struct stat *stbuf)
 {
+  	struct fuse_context * context = fuse_get_context();
+
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
@@ -203,11 +156,12 @@ static int hookfs_getattr(const char *path, struct stat *stbuf)
 
 	int res = lstat(rel_path, stbuf);
 	free(rel_path);
-
-	NOTIFY(post_getattr, path, res);
 		
-	if (res == -1)
+	if (res == -1) {
+   		log_event("stat",path,"ERR",errno,context->pid);
 		return -errno;
+	}
+	log_event("stat",path,"OK",errno,context->pid);
 
 	return 0;
 }
@@ -217,20 +171,23 @@ static int hookfs_fgetattr(const char *path, struct stat *stbuf,
 {
 	int res;
 
-	(void) path;
+  	struct fuse_context * context = fuse_get_context();
 
 	res = fstat(fi->fh, stbuf);
 	
-	NOTIFY(post_getattr, path, res);
-
-	if (res == -1)
+	if (res == -1) {
+   		log_event("stat",path,"ERR",errno,context->pid);
 		return -errno;
-
+	}
+	log_event("stat",path,"OK",errno,context->pid);
+	
 	return 0;
 }
 
 static int hookfs_access(const char *path, int mask)
 {
+ 	struct fuse_context * context = fuse_get_context();
+
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
@@ -239,11 +196,12 @@ static int hookfs_access(const char *path, int mask)
 	int res = access(rel_path, mask);
 	free(rel_path);
 	
-	NOTIFY(post_getattr, path, res);
-
-	if (res == -1)
+	if (res == -1) {
+   		log_event("stat",path,"ERR",errno,context->pid);
 		return -errno;
-
+	}
+	log_event("stat",path,"OK",errno,context->pid);
+	
 	return 0;
 }
 
@@ -506,6 +464,8 @@ static int hookfs_chown(const char *path, uid_t uid, gid_t gid)
 
 static int hookfs_truncate(const char *path, off_t size)
 {
+	struct fuse_context * context = fuse_get_context();
+
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
@@ -514,10 +474,12 @@ static int hookfs_truncate(const char *path, off_t size)
 	int res = truncate(rel_path, size);
 	free(rel_path);
 
-	NOTIFY(post_truncate, path, res);
-	if (res == -1)
+	if (res == -1) {
+  		log_event("write",path,"ERR",errno,context->pid);
 		return -errno;
-
+	}
+	log_event("write",path,"OK",errno,context->pid);
+	
 	return 0;
 }
 
@@ -526,13 +488,15 @@ static int hookfs_ftruncate(const char *path, off_t size,
 {
 	int res;
 
-	(void) path;
+	struct fuse_context * context = fuse_get_context();
 
 	res = ftruncate(fi->fh, size);
-	NOTIFY(post_truncate, path, res);
 
-	if (res == -1)
+	if (res == -1) {
+  		log_event("write",path,"ERR",errno,context->pid);
 		return -errno;
+	}
+	log_event("write",path,"OK",errno,context->pid);
 
 	return 0;
 }
@@ -588,16 +552,27 @@ static int open_safely(const char *rel_path, int flags, mode_t mode) {
 
 static int hookfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
+	struct fuse_context * context = fuse_get_context();
+  
+	if(! is_event_allowed("create",path,context->pid)) {
+	  errno=2; // not found
+	  return -errno;
+	}
+
 	char * rel_path = malloc_relative_path(path);
+	
 	if (! rel_path) {
 		return -errno;
 	}
 
 	int fd = open_safely(rel_path, fi->flags, mode);
 	free(rel_path);
-	NOTIFY(post_open, path, fd);
-	if (fd == -1)
+
+	if (fd == -1) {
+		log_event("create",path,"ERR",errno,context->pid);
 		return -errno;
+	} 
+	log_event("create",path,"OK",errno,context->pid);
 
 	fi->fh = fd;
 	return 0;
@@ -610,9 +585,8 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 
 	struct fuse_context * context = fuse_get_context();
 
-	
 	if(! is_event_allowed("open",path,context->pid)) {
-	  errno=2;
+	  errno=2; // not found
 	  return -errno;
 	}
 	
@@ -623,11 +597,13 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 
 	fd = open_safely(rel_path, fi->flags, 0000);
 	free(rel_path);
-	NOTIFY(post_open, path, fd);
 
-	if (fd == -1)
+	if (fd == -1) {
+		log_event("open",path,"ERR",errno,context->pid);
 		return -errno;
-
+	}
+	
+	log_event("open",path,"OK",errno,context->pid);
 	fi->fh = fd;
 	return 0;
 }
@@ -637,12 +613,15 @@ static int hookfs_read(const char *path, char *buf, size_t size, off_t offset,
 {
 	int res;
 
-	(void) path;
+	struct fuse_context * context = fuse_get_context();
+	
 	res = pread(fi->fh, buf, size, offset);
-	if (res == -1)
+	if (res == -1) {
+		log_event("read",path,"ERR",errno,context->pid);
 		res = -errno;
+	}
 
-	NOTIFY(post_read, path, res);
+	log_event("read",path,"OK",errno,context->pid);
 	return res;
 }
 
@@ -651,12 +630,15 @@ static int hookfs_write(const char *path, const char *buf, size_t size,
 {
 	int res;
 
-	(void) path;
-	res = pwrite(fi->fh, buf, size, offset);
-	if (res == -1)
-		res = -errno;
+	struct fuse_context * context = fuse_get_context();
 
-	NOTIFY(post_write, path, res);
+	res = pwrite(fi->fh, buf, size, offset);
+	if (res == -1) {
+  		log_event("write",path,"ERR",errno,context->pid);
+		res = -errno;
+	}
+
+	log_event("write",path,"OK",errno,context->pid);
 
 	return res;
 }
