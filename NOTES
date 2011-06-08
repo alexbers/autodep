@@ -1,0 +1,10 @@
+This is few notes mainly for myself.
+
+1. Format of log record:
+ <time of event sec since 1970>
+ <event type: stat, open, read, write>
+ <name of file>
+ <returned value>
+ <errno>
+ <parent processes>(will be pid)
+ <allowed/denied>
