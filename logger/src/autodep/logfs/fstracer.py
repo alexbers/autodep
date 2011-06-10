@@ -30,22 +30,76 @@ def parse_message(message):
 # check if proccess is finished
 def checkfinished(pid):
   if not os.path.exists("/proc/%d/stat" % pid):
-	return (True,0)
+	return True
 
   try:
 	pid_child,exitcode = os.waitpid(pid, os.WNOHANG)
   except OSError, e:
 	if e.errno == 10: 
-	  return (False,0)
+	  return False
 	else:
 	  raise
   
   if pid_child==0:
-	return (False,0)
-  return (True,exitcode)
+	return False
+  return True
+
+#check if process is zombie
+def iszombie(pid):
+  try:
+	statfile=open("/proc/%d/stat" % pid,"r")
+	line=statfile.readline()
+	statfile.close()
+	line=line.rsplit(")")[1] # find last ")" char
+	line=line.strip()
+	match=re.match(r"(\w)",line)
+	if match==None:
+	  print "Failed to get check if process is zombie. Format of /proc/<pid>/stat is incorrect. Did you change a kernel?"
+	  return False
+	
+	return match.group(1)=="Z"
+	
+  except IOError,e:
+	return True
   
-# default access filter. Allow always  
-def defaultfilter(time, filename, pid):
+
+# uses /proc filesystem to get pid of parent
+def getparentpid(pid):
+  try:
+	statfile=open("/proc/%d/stat" % pid,"r")
+	line=statfile.readline()
+	statfile.close()
+	line=line.rsplit(")")[1] # find last ")" char
+	line=line.strip()
+	match=re.match(r"\w\s(\d+)",line)
+	if match==None:
+	  print "Failed to get parent process. Format of /proc/<pid>/stat is incorrect. Did you change a kernel?"
+	  return 1
+	
+	return int(match.group(1))
+	
+  except IOError,e:
+	return 1
+
+#check if message came from one of a child
+def checkparent(parent,child):
+  #print "Parent %s, child %s"%(parent,child)
+  if child==1 or getparentpid(child)==1:
+	return True
+	  
+  currpid=child
+#   for(pid=getpid();pid!=0;pid=__getparentpid(pid))
+  while getparentpid(currpid)!=1:
+	currpid=getparentpid(currpid)
+	if currpid==parent:
+	  return True
+  
+  print "External actions with filesystem detected pid of external prog is %d" % child
+  return False
+
+# default access filter. Allow acess to all files
+def defaultfilter(eventname, filename, pid):
+  
   return True
 
 # run the program and get file access events
@@ -59,7 +113,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	sock_listen=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 	sock_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 	sock_listen.bind(socketname)
-	sock_listen.listen(1024)
+	sock_listen.listen(65536*8)
   except socket.error, e:
     print "Failed to create a socket for exchange data with the logger: %s" % e
     return []
@@ -103,7 +157,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  input.append(client)
 			  buffers[client]=''
 		  else:
-			data=s.recv(65536)
+			data=s.recv(4096)
 			
 			buffers[s]+=data
 			  
@@ -131,26 +185,50 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  #print "datalen: %d" % len(data)
 			  message=parse_message(record)
 			  
+			  
 			  try:
 				if message[4]=="ASKING":
-				  if filterproc(message[1],message[2],message[3]):
+				  #print "ASKING %s"%message[2]
+				  if message[2]=="/" or ( # always allow acces to "/" because of some processes like ksysguardd
+					True):#checkparent(pid,int(message[3])) and filterproc(message[1],message[2],message[3])):
 					s.sendall("ALLOW\n"); # TODO: think about flush here
+					#print "ALLOWING %s"%message[2]
+					
 				  else:
 					print "Blocking an access to %s" % message[2]
 					s.sendall("DENY\n"); # TODO: think about flush here
 					
 				else:
-				  events.append([message[1],message[2]]);
+				  # check previous five messages for possible repeats
+				  for prevevent in events[-5:]:
+					if prevevent[1:]==message[1:]:
+					  break
+				  else:
+					pass
+					#events.append(message)
 			  except IndexError:
 				print "IndexError while parsing %s"%record
 			  #print "!!"+data+"!!"
 			  #print parse_message(data)
 
-		if len(input)==1 and connects==0:
+		
+		if len(input)==1 and connects==0: #or 
 		  # seems like there is no connect
-		  print "It seems like a logger module was unable to start." + \
+		  print "It seems like a logger module was unable to start or failed to finish" + \
 				"Check that you are not launching a suid program under non-root user."
 		  return []
+		#if iszombie(pid):
+		#  print "Child finished, but connection remains. Closing a connection"
+		#  break
 
 	  os.wait()
+  
+  if len(events)==0:
+	return []
+	
+  timeofstart=int(events[0][0])
+  # make all event times relative to time 0 - time of start task
+  for event_num in range(0,len(events)):
+	events[event_num][0]=int(events[event_num][0])-timeofstart
   return events
+

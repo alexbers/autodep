@@ -60,7 +60,7 @@ struct hookfs_config config;
  * Prints a string escaping spaces and '\'
  * Does not check input variables
 */
-void __print_escaped(FILE *fh ,const char *s){
+static void __print_escaped(FILE *fh ,const char *s){
 	for(;(*s)!=0; s++) {
 		if(*s==' ')
 		  fprintf(fh,"\\ ");
@@ -78,10 +78,25 @@ void __print_escaped(FILE *fh ,const char *s){
 }
 
 /*
- * Format of log string: time event file flags result parents
-*/
-void log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
-  pthread_mutex_lock( &socketblock );
+ * This is here because launching of a task is very slow without it
+ */
+static int is_file_excluded(const char *filename) {
+  if(strcmp(filename,"/etc/ld.so.preload")==0)
+	return 1;
+  if(strcmp(filename,"/etc/ld.so.cache")==0)
+	return 1;
+  if(strcmp(filename,"/usr/lib64/locale/locale-archive")==0)
+	return 1;
+  if(strcmp(filename,"/usr/lib64/locale")==0)
+	return 1;
+  
+  return 0;
+}
+
+
+static void raw_log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
+  if(is_file_excluded(filename)) return;
+
 
   fprintf(log_file,"%lld ",(unsigned long long)time(NULL));
 
@@ -97,6 +112,14 @@ void log_event(const char *event_type, const char *filename, char *result,int er
   fprintf(log_file,"\n");
   fflush(log_file);
 
+}
+
+/*
+ * Format of log string: time event file flags result parents
+*/
+static void log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
+  pthread_mutex_lock( &socketblock );
+  raw_log_event(event_type,filename,result,err,pid);
   pthread_mutex_unlock( &socketblock );
 }
 
@@ -104,13 +127,17 @@ void log_event(const char *event_type, const char *filename, char *result,int er
  * Ack a python part about an event
  * Returns 1 if access is allowed and 0 if denied
 */
-int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
+static int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
   // sending asking log_event
-  log_event(event_type,filename,"ASKING",0,pid);
+  if(is_file_excluded(filename)) return 1;
+  //return 1;
+  pthread_mutex_lock( &socketblock );
+  
+  raw_log_event(event_type,filename,"ASKING",0,pid);
   char answer[8];
 
-  pthread_mutex_lock( &socketblock );
   fscanf(log_file,"%7s",answer);
+  fflush(log_file); // yes, it is here too
   pthread_mutex_unlock( &socketblock );
   
   if(strcmp(answer,"ALLOW")==0)
@@ -121,7 +148,6 @@ int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
 	fprintf(stderr,"Protocol error, text should be ALLOW or DENY, got: %s",answer);
   return 0;
 }
-
 
 static char * malloc_relative_path(const char *path) {
 	int len = strlen(path);
@@ -149,6 +175,14 @@ static int hookfs_getattr(const char *path, struct stat *stbuf)
 {
   	struct fuse_context * context = fuse_get_context();
 
+	if(! is_event_allowed("stat",path,context->pid)) {
+	  errno=2; // not found
+	  log_event("stat",path,"DENIED",errno,context->pid);
+
+	  return -errno;
+	}
+
+	
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
@@ -172,7 +206,14 @@ static int hookfs_fgetattr(const char *path, struct stat *stbuf,
 	int res;
 
   	struct fuse_context * context = fuse_get_context();
+	if(! is_event_allowed("stat",path,context->pid)) {
+	  errno=2; // not found
+	  log_event("stat",path,"DENIED",errno,context->pid);
 
+	  return -errno;
+	}
+
+	
 	res = fstat(fi->fh, stbuf);
 	
 	if (res == -1) {
@@ -188,6 +229,14 @@ static int hookfs_access(const char *path, int mask)
 {
  	struct fuse_context * context = fuse_get_context();
 
+	if(! is_event_allowed("stat",path,context->pid)) {
+	  errno=2; // not found
+	  log_event("stat",path,"DENIED",errno,context->pid);
+
+	  return -errno;
+	}
+
+	
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
@@ -348,7 +397,7 @@ static int hookfs_unlink(const char *path)
 
 	int res = unlink(rel_path);
 	free(rel_path);
-	//NOTIFY(post_unlink, path, res);
+
 	if (res == -1)
 		return -errno;
 
@@ -556,6 +605,8 @@ static int hookfs_create(const char *path, mode_t mode, struct fuse_file_info *f
   
 	if(! is_event_allowed("create",path,context->pid)) {
 	  errno=2; // not found
+	  log_event("create",path,"DENIED",errno,context->pid);
+
 	  return -errno;
 	}
 
@@ -587,6 +638,8 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 
 	if(! is_event_allowed("open",path,context->pid)) {
 	  errno=2; // not found
+	  log_event("open",path,"DENIED",errno,context->pid);
+
 	  return -errno;
 	}
 	
@@ -895,7 +948,6 @@ static int hookfs_handle_opt(void *data, const char *arg, int key, struct fuse_a
 					 "\n"
 					 "%s options:\n"
 					 "    --argv-debug           enable argv debugging\n"
-					 "    --flush                flush log after each write\n"
 					 "\n"
 					 "general options:\n"
 					 "    -o opt,[opt...]        mount options\n"

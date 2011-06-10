@@ -93,9 +93,9 @@ class logger:
 		print "Unmounting partitions"
 		self.mountlist.reverse()
 		for mount in self.mountlist:
-		  self.smartcommandlauncher(['umount',self.rootmountpath+mount])
-		self.smartcommandlauncher(['fusermount','-u',self.rootmountpath]);
-		self.smartcommandlauncher(['umount',self.rootmountpath]);
+		  self.smartcommandlauncher(['umount','-l',self.rootmountpath+mount])
+		self.smartcommandlauncher(['fusermount','-z','-u',self.rootmountpath]);
+		self.smartcommandlauncher(['umount','-l',self.rootmountpath]);
 		os.rmdir(self.rootmountpath)
 
 	  except OSError, e:
