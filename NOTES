@@ -9,3 +9,16 @@ This is few notes mainly for myself.
 
 2. Format of answer for ASKING packet:
  <ALLOW | DENY>
+
+3. Format of answer for not ASKING packet:
+ <ALLOW>
+
+4. Format of events structure:
+ [
+  {
+   <stage of building>:{<filename>:[<was readed>,<was writed>]}
+  },
+  {
+   <stage of building>:{<filename>:[<was not found>,<was blocked>]}
+  }
+ ]

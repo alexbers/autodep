@@ -11,6 +11,8 @@ import socket
 import select
 import re
 
+import proc_helpers
+
 import logger_hooklib
 import logger_fusefs
 
@@ -52,7 +54,7 @@ def iszombie(pid):
 	statfile.close()
 	line=line.rsplit(")")[1] # find last ")" char
 	line=line.strip()
-	match=re.match(r"(\w)",line)
+	match=re.match(r"^(\w)",line)
 	if match==None:
 	  print "Failed to get check if process is zombie. Format of /proc/<pid>/stat is incorrect. Did you change a kernel?"
 	  return False
@@ -64,6 +66,7 @@ def iszombie(pid):
   
 
 # uses /proc filesystem to get pid of parent
+# it is not used in program. Using function on C instead
 def getparentpid(pid):
   try:
 	statfile=open("/proc/%d/stat" % pid,"r")
@@ -71,7 +74,7 @@ def getparentpid(pid):
 	statfile.close()
 	line=line.rsplit(")")[1] # find last ")" char
 	line=line.strip()
-	match=re.match(r"\w\s(\d+)",line)
+	match=re.match(r"^\w\s(\d+)",line)
 	if match==None:
 	  print "Failed to get parent process. Format of /proc/<pid>/stat is incorrect. Did you change a kernel?"
 	  return 1
@@ -97,6 +100,28 @@ def checkparent(parent,child):
   print "External actions with filesystem detected pid of external prog is %d" % child
   return False
 
+# check pid, returns stage of building
+def get_stage_by_pid(pid,toppid):
+  #return "unknown"
+
+  currpid=proc_helpers.getparentpid(pid)
+  try:
+	while currpid>1 and currpid!=toppid:
+	  cmdlinefile=open("/proc/%d/cmdline" % currpid,"r")
+	  cmdline=cmdlinefile.read()
+	  cmdlinefile.close()
+	  arguments=cmdline.split("\0")
+	  #print arguments
+	  if len(arguments)>=3 and arguments[1][-9:]=="ebuild.sh":
+		return arguments[2]
+	  currpid=proc_helpers.getparentpid(currpid)
+
+
+  except IOError,e:
+	return "unknown"
+
+  return "unknown"
+
 # default access filter. Allow acess to all files
 def defaultfilter(eventname, filename, pid):
   
@@ -104,7 +129,7 @@ def defaultfilter(eventname, filename, pid):
 
 # run the program and get file access events
 def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter):
-  events=[]
+  events={}
   # generate a random socketname
   tmpdir = tempfile.mkdtemp()
   socketname = os.path.join(tmpdir, 'socket')
@@ -188,24 +213,56 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  
 			  try:
 				if message[4]=="ASKING":
-				  #print "ASKING %s"%message[2]
-				  if message[2]=="/" or ( # always allow acces to "/" because of some processes like ksysguardd
-					True):#checkparent(pid,int(message[3])) and filterproc(message[1],message[2],message[3])):
+				  if filterproc(message[1],message[2],message[3]):
 					s.sendall("ALLOW\n"); # TODO: think about flush here
-					#print "ALLOWING %s"%message[2]
 					
 				  else:
 					print "Blocking an access to %s" % message[2]
 					s.sendall("DENY\n"); # TODO: think about flush here
 					
 				else:
-				  # check previous five messages for possible repeats
-				  for prevevent in events[-5:]:
-					if prevevent[1:]==message[1:]:
-					  break
+				  eventname,filename,messagepid,result=message[1:5]
+				  stage=get_stage_by_pid(int(messagepid),pid)
+
+				  s.sendall("ALLOW\n"); # to continue execution
+				  
+				  if not stage in events:
+					events[stage]=[{},{}]
+				  
+				  hashofsucesses=events[stage][0]
+				  hashoffailures=events[stage][1]
+				  
+				  if result=="OK":
+					if not filename in hashofsucesses:
+					  hashofsucesses[filename]=[False,False]
+					
+					readed_or_writed=hashofsucesses[filename]
+					
+					if eventname=="read":
+					  readed_or_writed[0]=True
+					elif eventname=="write":
+					  readed_or_writed[1]=True
+					  
+				  elif result[0:3]=="ERR" or result=="DENIED":
+					if not filename in hashoffailures:
+					  hashoffailures[filename]=[False,False]
+					notfound_or_blocked=hashoffailures[filename]
+					
+					if result=="ERR/2":
+					  notfound_or_blocked[0]=True
+					elif result=="DENIED":
+					  notfound_or_blocked[1]=True
+
 				  else:
-					pass
+					print "ELSE"
+				  # check previous five messages for possible repeats
+				  #for prevevent in events[-5:]:
+					#if prevevent[1:]==message[1:]:
+					#  break
+				  #else:
+					#pass
 					#events.append(message)
+				  
 			  except IndexError:
 				print "IndexError while parsing %s"%record
 			  #print "!!"+data+"!!"
@@ -217,18 +274,18 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 		  print "It seems like a logger module was unable to start or failed to finish" + \
 				"Check that you are not launching a suid program under non-root user."
 		  return []
-		#if iszombie(pid):
-		#  print "Child finished, but connection remains. Closing a connection"
-		#  break
+		if len(inputready)==0 and iszombie(pid):
+		  print "Child finished, but connection remains. Closing a connection"
+		  break
 
 	  os.wait()
   
-  if len(events)==0:
-	return []
+  #if len(events)==0:
+	#return []
 	
-  timeofstart=int(events[0][0])
+  #timeofstart=int(events[0][0])
   # make all event times relative to time 0 - time of start task
-  for event_num in range(0,len(events)):
-	events[event_num][0]=int(events[event_num][0])-timeofstart
+  #for event_num in range(0,len(events)):
+	#events[event_num][0]=int(events[event_num][0])-timeofstart
   return events
 

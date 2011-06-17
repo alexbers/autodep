@@ -16,29 +16,32 @@ if len(sys.argv)<2:
   exit(1)
   
 events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:],approach="fusefs")
+#print events
 
-succ_events=[]
-err_events=[]
-deny_events=[]
-
-for event in events:
-  if event[4]=="OK":
-	succ_events.append(event)
-  elif event[4]=="DENIED":
-	deny_events.append(event)
-  else:
-	err_events.append(event)
+for stage in events:
+  succ_events=events[stage][0]
+  fail_events=events[stage][1]
+  print "On stage %s:" % stage
+  for filename in sorted(succ_events):
+	print " %40s\t" % filename,
+	if succ_events[filename]==[False,False]:
+	  print "accessed"
+	elif succ_events[filename]==[True,False]:
+	  print "readed"
+	elif succ_events[filename]==[False,True]:
+	  print "writed"
+	elif succ_events[filename]==[True,True]:
+	  print "readed and writed"
+  for filename in sorted(fail_events):
 	
-  
+	print " %40s\t"%filename,
+	if fail_events[filename]==[True,False]:
+	  print "file not found"
+	elif fail_events[filename]==[True,True]:
+	  print "blocked somewhen, not found somewhen"
+	elif fail_events[filename]==[False,True]:
+	  print "blocked"
+	elif fail_events[filename]==[False,False]:
+	  print "other error"
 	
-print "Report:"	
-if len(succ_events)>0:
-  print "Successful events:"
-  printevents(succ_events)
-if len(err_events)>0:
-  print "\nNon-successful events:"
-  printevents(err_events)
-if len(deny_events)>0:
-  print "\nBlocked events:"
-  printevents(deny_events)
-#logfs.fstracer.getfsevents("emerge", ["emerge","--info"])
+##logfs.fstracer.getfsevents("emerge", ["emerge","--info"])

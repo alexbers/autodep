@@ -41,7 +41,11 @@
 
 #define MIN(a, b)  (((a) < (b)) ? (a) : (b))
 
+
+#define MAXPATHLEN 256
 #define MAXSOCKETPATHLEN 108
+#define MAXFILEBUFFLEN 2048
+
 
 struct hookfs_config {
      int argv_debug;
@@ -55,6 +59,9 @@ char *mountpoint = NULL;
 FILE * log_file = NULL;
 int log_socket=-1;
 struct hookfs_config config;
+
+// Pid of parent process
+pid_t parent_pid=-1;
 
 /*
  * Prints a string escaping spaces and '\'
@@ -78,9 +85,54 @@ static void __print_escaped(FILE *fh ,const char *s){
 }
 
 /*
+ * Get a pid of the parent proccess
+ * Parse the /proc/pid/stat
+ * We need a first number after the last ')' character
+*/
+pid_t getparentpid(pid_t pid){
+  char filename[MAXPATHLEN];
+  snprintf(filename,MAXPATHLEN, "/proc/%d/stat",pid);
+  FILE *stat_file_handle=fopen(filename,"r");
+  if(stat_file_handle==NULL)
+	return 0;
+  
+  char filedata[MAXFILEBUFFLEN];
+  size_t bytes_readed=fread(filedata,sizeof(char),MAXFILEBUFFLEN,stat_file_handle);
+  if(bytes_readed==0 || bytes_readed>=MAXFILEBUFFLEN) {
+	fclose(stat_file_handle);
+	return 0;	
+  }
+  
+  filedata[bytes_readed]=0;
+  
+  char *beg_scan_offset=rindex(filedata,')');
+  if(beg_scan_offset==NULL) {
+	fclose(stat_file_handle);
+	return 0;	
+  }
+  
+  pid_t parent_pid;
+  int tokens_readed=sscanf(beg_scan_offset,") %*c %d",&parent_pid);
+  if(tokens_readed!=1) {
+	fclose(stat_file_handle);
+	return 0;
+  }
+  fclose(stat_file_handle);
+  
+  if(pid==1)
+	return 0; // set this explicitly. 
+	//           I am not sure that ppid of init proccess is always 0
+  
+  return parent_pid;
+}
+
+
+/*
  * This is here because launching of a task is very slow without it
  */
 static int is_file_excluded(const char *filename) {
+  if(strcmp(filename,"/")==0)
+	return 1;
   if(strcmp(filename,"/etc/ld.so.preload")==0)
 	return 1;
   if(strcmp(filename,"/etc/ld.so.cache")==0)
@@ -93,9 +145,22 @@ static int is_file_excluded(const char *filename) {
   return 0;
 }
 
+/*
+ * Check external access - for example user's access to mount
+*/ 
+static int is_process_external(pid_t pid) {
+  if(pid==1 || getparentpid(pid)==1)
+	return 0;
+  
+  getparentpid(getpid());
+  for(;pid!=0;pid=getparentpid(pid))
+	if(pid==parent_pid)
+	  return 0;
+
+	return 1;
+}
 
 static void raw_log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
-  if(is_file_excluded(filename)) return;
 
 
   fprintf(log_file,"%lld ",(unsigned long long)time(NULL));
@@ -112,14 +177,23 @@ static void raw_log_event(const char *event_type, const char *filename, char *re
   fprintf(log_file,"\n");
   fflush(log_file);
 
+  // always wait for an answer
+//  fflush(log_file); // yes, it is here too
+  
 }
 
 /*
  * Format of log string: time event file flags result parents
 */
 static void log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
+  if(is_file_excluded(filename)) return;
+
   pthread_mutex_lock( &socketblock );
   raw_log_event(event_type,filename,result,err,pid);
+
+  char answer[8];
+  fscanf(log_file,"%7s",answer);
+
   pthread_mutex_unlock( &socketblock );
 }
 
@@ -130,6 +204,7 @@ static void log_event(const char *event_type, const char *filename, char *result
 static int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
   // sending asking log_event
   if(is_file_excluded(filename)) return 1;
+  if(is_process_external(pid)) return 0; // protecting from external access
   //return 1;
   pthread_mutex_lock( &socketblock );
   
@@ -225,32 +300,18 @@ static int hookfs_fgetattr(const char *path, struct stat *stbuf,
 	return 0;
 }
 
+// according FUSE documentation this function 
+// never run due to default_permissions option
 static int hookfs_access(const char *path, int mask)
 {
- 	struct fuse_context * context = fuse_get_context();
-
-	if(! is_event_allowed("stat",path,context->pid)) {
-	  errno=2; // not found
-	  log_event("stat",path,"DENIED",errno,context->pid);
-
-	  return -errno;
-	}
-
-	
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
 	}
 
-	int res = access(rel_path, mask);
+	access(rel_path, mask);
 	free(rel_path);
-	
-	if (res == -1) {
-   		log_event("stat",path,"ERR",errno,context->pid);
-		return -errno;
-	}
-	log_event("stat",path,"OK",errno,context->pid);
-	
+		
 	return 0;
 }
 
@@ -639,7 +700,7 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 	if(! is_event_allowed("open",path,context->pid)) {
 	  errno=2; // not found
 	  log_event("open",path,"DENIED",errno,context->pid);
-
+	
 	  return -errno;
 	}
 	
@@ -982,6 +1043,13 @@ int main(int argc, char *argv[]) {
 
   debug_argv(args.argc, args.argv, &config);
 
+  char *parent_pid_env=getenv("PARENT_PID");
+  if(parent_pid_env==NULL || atoi(parent_pid_env)==0) {
+	fprintf(stderr, "Parent pid is unknown, external access will be not blocked\n");
+  } else {
+	parent_pid=atoi(parent_pid_env);
+  }
+  
   char *log_socket_name=getenv("LOG_SOCKET");
   if(log_socket_name==NULL) {
 	  fprintf(stderr,"Using stderr as output for logs "
