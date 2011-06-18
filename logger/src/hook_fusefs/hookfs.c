@@ -46,6 +46,8 @@
 #define MAXSOCKETPATHLEN 108
 #define MAXFILEBUFFLEN 2048
 
+#define IOBUFSIZE 65536
+
 
 struct hookfs_config {
      int argv_debug;
@@ -202,7 +204,6 @@ static void raw_log_event(const char *event_type, const char *filename, char *re
 	fprintf(log_file,"%s",result);
 
   fprintf(log_file,"%c%c",0,0);
-  fflush(log_file);  
 }
 
 /*
@@ -229,10 +230,10 @@ static int is_event_allowed(const char *event_type,const char *filename, pid_t p
 
   // sending asking log_event
   raw_log_event(event_type,filename,"ASKING",0,stage);
+  fflush(log_file);
   char answer[8];
 
   fscanf(log_file,"%7s",answer);
-  fflush(log_file); // yes, it is here too
   pthread_mutex_unlock( &socketblock );
   
   if(strcmp(answer,"ALLOW")==0)
@@ -1113,6 +1114,12 @@ int main(int argc, char *argv[]) {
 	  fprintf(stderr,"Unable to open a socket for a steam writing: %s\n", strerror(errno));
 	  exit(1);
 	}
+	
+	ret=setvbuf(log_file,NULL,_IOFBF,IOBUFSIZE);
+	if(ret!=0){
+	  fprintf(stderr,"Unable to set a size of io buffer");
+	  exit(1);
+	} 
   }
   
   if (! try_chdir_to_mountpoint(args.argc, args.argv)) {

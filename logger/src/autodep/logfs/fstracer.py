@@ -173,7 +173,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  input.append(client)
 			  buffers[client]=""
 		  else:
-			data=s.recv(4096)
+			data=s.recv(65536)
 			
 			buffers[s]+=data
 			  
