@@ -93,7 +93,7 @@ pid_t getparentpid(pid_t pid){
   
   filedata[bytes_readed]=0;
   
-  char *beg_scan_offset=rindex(filedata,')');
+  char *beg_scan_offset=strrchr(filedata,')');
   if(beg_scan_offset==NULL) {
 	fclose(stat_file_handle);
 	return 0;	
