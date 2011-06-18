@@ -18,9 +18,9 @@ import logger_fusefs
 
 
 def unescape(s):
-  s=re.sub(r'\\r', '\r', s)
-  s=re.sub(r'\\n', '\n', s)
-  s=re.sub(r'\\(.)', r'\1', s)
+  s=s.replace(r'\\r', '\r')
+  s=s.replace(r'\\n', '\n')
+  s=s.replace(r'\\', '')
   return s
 
 def parse_message(message):
@@ -138,7 +138,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	sock_listen=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 	sock_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 	sock_listen.bind(socketname)
-	sock_listen.listen(65536*8)
+	sock_listen.listen(65536)
   except socket.error, e:
     print "Failed to create a socket for exchange data with the logger: %s" % e
     return []
@@ -168,7 +168,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	  buffers = {}
 	  
 	  while input:
-		inputready,outputready,exceptready = select.select(input,[],[],5)
+		inputready,_,_ = select.select(input,[],[],5)
 		
 		for s in inputready:
 		  #print "!! len: %d" % len(buffers)
@@ -222,11 +222,8 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 					
 				else:
 				  eventname,filename,stage,result=message[1:5]
-				  #stage=get_stage_by_pid(int(messagepid),pid)
-				  print message;
+				  #print message;
 
-				  s.sendall("ALLOW\n"); # to continue execution
-				  
 				  if not stage in events:
 					events[stage]=[{},{}]
 				  
@@ -256,13 +253,6 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 
 				  else:
 					print "Error in logger module<->analyser protocol"
-				  # check previous five messages for possible repeats
-				  #for prevevent in events[-5:]:
-					#if prevevent[1:]==message[1:]:
-					#  break
-				  #else:
-					#pass
-					#events.append(message)
 				  
 			  except IndexError:
 				print "IndexError while parsing %s"%record

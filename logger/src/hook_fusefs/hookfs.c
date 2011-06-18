@@ -79,10 +79,6 @@ static void __print_escaped(FILE *fh ,const char *s){
 	for(;(*s)!=0; s++) {
 		if(*s==' ')
 		  fprintf(fh,"\\ ");
-		else if(*s==',')
-		  fprintf(fh,"\\,");
-		else if(*s=='\r')
-		  fprintf(fh,"\\r");
 		else if(*s=='\n')
 		  fprintf(fh,"\\n");
 		else if(*s=='\\')
@@ -231,11 +227,7 @@ static void raw_log_event(const char *event_type, const char *filename, char *re
 	fprintf(log_file,"%s",result);
 
   fprintf(log_file,"\n");
-  fflush(log_file);
-
-  // always wait for an answer
-//  fflush(log_file); // yes, it is here too
-  
+  fflush(log_file);  
 }
 
 /*
@@ -246,9 +238,6 @@ static void log_event(const char *event_type, const char *filename, char *result
 
   pthread_mutex_lock( &socketblock );
   raw_log_event(event_type,filename,result,err,stage);
-
-  char answer[8];
-  fscanf(log_file,"%7s",answer);
 
   pthread_mutex_unlock( &socketblock );
 }
