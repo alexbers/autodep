@@ -4,7 +4,7 @@ This is few notes mainly for myself.
  <time of event: sec since 1970>
  <event type: stat, create, open, read, write>
  <name of file>
- <pid>
+ <building stage: stagename or unknown>
  <result:OK,ERR/errno,ASKING,DENIED>
 
 2. Format of answer for ASKING packet:

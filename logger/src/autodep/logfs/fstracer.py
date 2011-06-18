@@ -221,8 +221,9 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 					s.sendall("DENY\n"); # TODO: think about flush here
 					
 				else:
-				  eventname,filename,messagepid,result=message[1:5]
-				  stage=get_stage_by_pid(int(messagepid),pid)
+				  eventname,filename,stage,result=message[1:5]
+				  #stage=get_stage_by_pid(int(messagepid),pid)
+				  print message;
 
 				  s.sendall("ALLOW\n"); # to continue execution
 				  
@@ -254,7 +255,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 					  notfound_or_blocked[1]=True
 
 				  else:
-					print "ELSE"
+					print "Error in logger module<->analyser protocol"
 				  # check previous five messages for possible repeats
 				  #for prevevent in events[-5:]:
 					#if prevevent[1:]==message[1:]:

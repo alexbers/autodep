@@ -63,6 +63,14 @@ struct hookfs_config config;
 // Pid of parent process
 pid_t parent_pid=-1;
 
+char *stagenames[]={
+  "pretend","setup","fetch","digest","manifest","unpack","prepare","configure","compile","test",
+  "preinst","postinst","install","qmerge","merge","prerm","postrm","unmerge","config",
+  "package","rpm","clean"
+};
+int stagenameslength=sizeof(stagenames)/sizeof(char *);
+
+
 /*
  * Prints a string escaping spaces and '\'
  * Does not check input variables
@@ -126,6 +134,53 @@ pid_t getparentpid(pid_t pid){
   return parent_pid;
 }
 
+/*
+ * Get a stage of building
+*/
+static char * getstagebypid(pid_t pid, pid_t toppid) {
+  pid_t currpid;
+  for(currpid=getparentpid(pid); currpid!=0 && currpid!=1 && currpid!=toppid;currpid=getparentpid(currpid)) {
+	char filename[MAXPATHLEN];
+	snprintf(filename,MAXPATHLEN, "/proc/%d/cmdline",pid);
+	FILE *cmdline_file_handle=fopen(filename,"r");
+	
+	if(cmdline_file_handle==NULL)
+	  return "unknown";
+	
+	char read_buffer[MAXFILEBUFFLEN];
+	int readed;
+	readed=fread(read_buffer,sizeof(char),MAXFILEBUFFLEN,cmdline_file_handle);
+	
+	fclose(cmdline_file_handle);  
+
+	int off;
+	int null_bytes_num=0;
+	char *stage_name;
+	// small automata here. For readabilyity it is not in classic form
+	for(off=0;off<readed;off++) {
+		if(read_buffer[off]==0){
+		  null_bytes_num++;
+		  if(null_bytes_num==2) {
+			if(read_buffer+off-9<read_buffer) // 9 is a "ebuild.sh" string length
+			  break;
+			if(strcmp(read_buffer+off-9,"ebuild.sh")!=0)
+			  break;
+			stage_name=read_buffer+off+1;	
+		  } else if(null_bytes_num==3) {
+			// ugly, but memory allocation is not better
+			// there is better way to write this
+			int i;
+			for(i=0; i<stagenameslength;i++) {
+			  if(strcmp(stage_name,stagenames[i])==0)
+				return stagenames[i];
+			}
+		  }
+		}
+	}
+  }
+  
+  return "unknown";
+}
 
 /*
  * This is here because launching of a task is very slow without it
@@ -160,7 +215,7 @@ static int is_process_external(pid_t pid) {
 	return 1;
 }
 
-static void raw_log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
+static void raw_log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
 
 
   fprintf(log_file,"%lld ",(unsigned long long)time(NULL));
@@ -169,11 +224,12 @@ static void raw_log_event(const char *event_type, const char *filename, char *re
   fprintf(log_file," ");
   __print_escaped(log_file, filename);
   
-  fprintf(log_file," %d ", pid);
+  fprintf(log_file," %s ", stage);
   if(strcmp(result,"ERR")==0)
 	fprintf(log_file,"%s/%d",result,err);
   else
 	fprintf(log_file,"%s",result);
+
   fprintf(log_file,"\n");
   fflush(log_file);
 
@@ -185,11 +241,11 @@ static void raw_log_event(const char *event_type, const char *filename, char *re
 /*
  * Format of log string: time event file flags result parents
 */
-static void log_event(const char *event_type, const char *filename, char *result,int err, pid_t pid) {
+static void log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
   if(is_file_excluded(filename)) return;
 
   pthread_mutex_lock( &socketblock );
-  raw_log_event(event_type,filename,result,err,pid);
+  raw_log_event(event_type,filename,result,err,stage);
 
   char answer[8];
   fscanf(log_file,"%7s",answer);
@@ -201,14 +257,14 @@ static void log_event(const char *event_type, const char *filename, char *result
  * Ack a python part about an event
  * Returns 1 if access is allowed and 0 if denied
 */
-static int is_event_allowed(const char *event_type,const char *filename, pid_t pid) {
+static int is_event_allowed(const char *event_type,const char *filename, pid_t pid, char* stage) {
   // sending asking log_event
   if(is_file_excluded(filename)) return 1;
   if(is_process_external(pid)) return 0; // protecting from external access
   //return 1;
   pthread_mutex_lock( &socketblock );
   
-  raw_log_event(event_type,filename,"ASKING",0,pid);
+  raw_log_event(event_type,filename,"ASKING",0,stage);
   char answer[8];
 
   fscanf(log_file,"%7s",answer);
@@ -249,10 +305,11 @@ static void give_to_creator_path(const char *path) {
 static int hookfs_getattr(const char *path, struct stat *stbuf)
 {
   	struct fuse_context * context = fuse_get_context();
-
-	if(! is_event_allowed("stat",path,context->pid)) {
+	char *stage=getstagebypid(context->pid,parent_pid);
+	
+	if(! is_event_allowed("stat",path,context->pid,stage)) {
 	  errno=2; // not found
-	  log_event("stat",path,"DENIED",errno,context->pid);
+	  log_event("stat",path,"DENIED",errno,stage);
 
 	  return -errno;
 	}
@@ -267,10 +324,10 @@ static int hookfs_getattr(const char *path, struct stat *stbuf)
 	free(rel_path);
 		
 	if (res == -1) {
-   		log_event("stat",path,"ERR",errno,context->pid);
+   		log_event("stat",path,"ERR",errno,stage);
 		return -errno;
 	}
-	log_event("stat",path,"OK",errno,context->pid);
+	log_event("stat",path,"OK",errno,stage);
 
 	return 0;
 }
@@ -281,9 +338,11 @@ static int hookfs_fgetattr(const char *path, struct stat *stbuf,
 	int res;
 
   	struct fuse_context * context = fuse_get_context();
-	if(! is_event_allowed("stat",path,context->pid)) {
+	char *stage=getstagebypid(context->pid,parent_pid);
+
+	if(! is_event_allowed("stat",path,context->pid,stage)) {
 	  errno=2; // not found
-	  log_event("stat",path,"DENIED",errno,context->pid);
+	  log_event("stat",path,"DENIED",errno,stage);
 
 	  return -errno;
 	}
@@ -292,10 +351,10 @@ static int hookfs_fgetattr(const char *path, struct stat *stbuf,
 	res = fstat(fi->fh, stbuf);
 	
 	if (res == -1) {
-   		log_event("stat",path,"ERR",errno,context->pid);
+   		log_event("stat",path,"ERR",errno,stage);
 		return -errno;
 	}
-	log_event("stat",path,"OK",errno,context->pid);
+	log_event("stat",path,"OK",errno,stage);
 	
 	return 0;
 }
@@ -575,6 +634,7 @@ static int hookfs_chown(const char *path, uid_t uid, gid_t gid)
 static int hookfs_truncate(const char *path, off_t size)
 {
 	struct fuse_context * context = fuse_get_context();
+	char *stage=getstagebypid(context->pid,parent_pid);
 
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
@@ -585,10 +645,10 @@ static int hookfs_truncate(const char *path, off_t size)
 	free(rel_path);
 
 	if (res == -1) {
-  		log_event("write",path,"ERR",errno,context->pid);
+  		log_event("write",path,"ERR",errno,stage);
 		return -errno;
 	}
-	log_event("write",path,"OK",errno,context->pid);
+	log_event("write",path,"OK",errno,stage);
 	
 	return 0;
 }
@@ -599,14 +659,15 @@ static int hookfs_ftruncate(const char *path, off_t size,
 	int res;
 
 	struct fuse_context * context = fuse_get_context();
+	char *stage=getstagebypid(context->pid,parent_pid);
 
 	res = ftruncate(fi->fh, size);
 
 	if (res == -1) {
-  		log_event("write",path,"ERR",errno,context->pid);
+  		log_event("write",path,"ERR",errno,stage);
 		return -errno;
 	}
-	log_event("write",path,"OK",errno,context->pid);
+	log_event("write",path,"OK",errno,stage);
 
 	return 0;
 }
@@ -663,10 +724,11 @@ static int open_safely(const char *rel_path, int flags, mode_t mode) {
 static int hookfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
 	struct fuse_context * context = fuse_get_context();
-  
-	if(! is_event_allowed("create",path,context->pid)) {
+  	char *stage=getstagebypid(context->pid,parent_pid);
+
+	if(! is_event_allowed("create",path,context->pid,stage)) {
 	  errno=2; // not found
-	  log_event("create",path,"DENIED",errno,context->pid);
+	  log_event("create",path,"DENIED",errno,stage);
 
 	  return -errno;
 	}
@@ -681,10 +743,10 @@ static int hookfs_create(const char *path, mode_t mode, struct fuse_file_info *f
 	free(rel_path);
 
 	if (fd == -1) {
-		log_event("create",path,"ERR",errno,context->pid);
+		log_event("create",path,"ERR",errno,stage);
 		return -errno;
 	} 
-	log_event("create",path,"OK",errno,context->pid);
+	log_event("create",path,"OK",errno,stage);
 
 	fi->fh = fd;
 	return 0;
@@ -696,10 +758,11 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 	char * rel_path = NULL;
 
 	struct fuse_context * context = fuse_get_context();
+	char *stage=getstagebypid(context->pid,parent_pid);
 
-	if(! is_event_allowed("open",path,context->pid)) {
+	if(! is_event_allowed("open",path,context->pid,stage)) {
 	  errno=2; // not found
-	  log_event("open",path,"DENIED",errno,context->pid);
+	  log_event("open",path,"DENIED",errno,stage);
 	
 	  return -errno;
 	}
@@ -713,11 +776,11 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 	free(rel_path);
 
 	if (fd == -1) {
-		log_event("open",path,"ERR",errno,context->pid);
+		log_event("open",path,"ERR",errno,stage);
 		return -errno;
 	}
 	
-	log_event("open",path,"OK",errno,context->pid);
+	log_event("open",path,"OK",errno,stage);
 	fi->fh = fd;
 	return 0;
 }
@@ -728,14 +791,15 @@ static int hookfs_read(const char *path, char *buf, size_t size, off_t offset,
 	int res;
 
 	struct fuse_context * context = fuse_get_context();
-	
+	char *stage=getstagebypid(context->pid,parent_pid);
+
 	res = pread(fi->fh, buf, size, offset);
 	if (res == -1) {
-		log_event("read",path,"ERR",errno,context->pid);
+		log_event("read",path,"ERR",errno,stage);
 		res = -errno;
 	}
 
-	log_event("read",path,"OK",errno,context->pid);
+	log_event("read",path,"OK",errno,stage);
 	return res;
 }
 
@@ -745,14 +809,15 @@ static int hookfs_write(const char *path, const char *buf, size_t size,
 	int res;
 
 	struct fuse_context * context = fuse_get_context();
+	char *stage=getstagebypid(context->pid,parent_pid);
 
 	res = pwrite(fi->fh, buf, size, offset);
 	if (res == -1) {
-  		log_event("write",path,"ERR",errno,context->pid);
+  		log_event("write",path,"ERR",errno,stage);
 		res = -errno;
 	}
 
-	log_event("write",path,"OK",errno,context->pid);
+	log_event("write",path,"OK",errno,stage);
 
 	return res;
 }
