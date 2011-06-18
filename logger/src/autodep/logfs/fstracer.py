@@ -16,18 +16,9 @@ import proc_helpers
 import logger_hooklib
 import logger_fusefs
 
-
-def unescape(s):
-  s=s.replace(r'\\r', '\r')
-  s=s.replace(r'\\n', '\n')
-  s=s.replace(r'\\', '')
-  return s
-
 def parse_message(message):
-  ret=re.split(r"(?<![\\]) ",message,6)
-  #for i in ret:
-	
-  return map(unescape, ret)
+  ret=message.split("\0")
+  return ret
 
 # check if proccess is finished
 def checkfinished(pid):
@@ -180,7 +171,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  (client,addr)=ret
 			  connects+=1; # client accepted
 			  input.append(client)
-			  buffers[client]=''
+			  buffers[client]=""
 		  else:
 			data=s.recv(4096)
 			
@@ -189,26 +180,25 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			if not data:
 			  s.close()
 			  input.remove(s)
-			  buffers[s]=""
+			  del buffers[s]
 			  connects-=1;
 			  if connects==0:
 				input.remove(sock_listen)
 				sock_listen.close()
 			  continue
-			
-			
-			if not "\n" in buffers[s]:
+						
+			if not "\0\0" in buffers[s]:
 			  continue
 			  
-			data,buffers[s] = buffers[s].rsplit("\n",1)
+			data,buffers[s] = buffers[s].rsplit("\0\0",1)
 			
-			for record in data.split("\n"):
+			for record in data.split("\0\0"):
 			  if len(record)==0:
 				continue
 			  # TODO: check array
 			  #print "!"+"%d"%len(record)+"?"
 			  #print "datalen: %d" % len(data)
-			  message=parse_message(record)
+			  message=record.split("\0")
 			  
 			  
 			  try:
@@ -256,8 +246,6 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 				  
 			  except IndexError:
 				print "IndexError while parsing %s"%record
-			  #print "!!"+data+"!!"
-			  #print parse_message(data)
 
 		
 		if len(input)==1 and connects==0: #or 

@@ -70,24 +70,6 @@ char *stagenames[]={
 };
 int stagenameslength=sizeof(stagenames)/sizeof(char *);
 
-
-/*
- * Prints a string escaping spaces and '\'
- * Does not check input variables
-*/
-static void __print_escaped(FILE *fh ,const char *s){
-	for(;(*s)!=0; s++) {
-		if(*s==' ')
-		  fprintf(fh,"\\ ");
-		else if(*s=='\n')
-		  fprintf(fh,"\\n");
-		else if(*s=='\\')
-		  fprintf(fh,"\\\\");
-		else
-		  fprintf(fh,"%c", *s);
-	}
-}
-
 /*
  * Get a pid of the parent proccess
  * Parse the /proc/pid/stat
@@ -203,30 +185,23 @@ static int is_process_external(pid_t pid) {
   if(pid==1 || getparentpid(pid)==1)
 	return 0;
   
-  getparentpid(getpid());
   for(;pid!=0;pid=getparentpid(pid))
 	if(pid==parent_pid)
 	  return 0;
 
-	return 1;
+  return 1;
 }
 
 static void raw_log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
-
-
-  fprintf(log_file,"%lld ",(unsigned long long)time(NULL));
-
-  __print_escaped(log_file, event_type);
-  fprintf(log_file," ");
-  __print_escaped(log_file, filename);
+  fprintf(log_file,"%lld%c",(unsigned long long)time(NULL),0);
+  fprintf(log_file,"%s%c%s%c%s%c",event_type,0,filename,0,stage,0);
   
-  fprintf(log_file," %s ", stage);
   if(strcmp(result,"ERR")==0)
 	fprintf(log_file,"%s/%d",result,err);
   else
 	fprintf(log_file,"%s",result);
 
-  fprintf(log_file,"\n");
+  fprintf(log_file,"%c%c",0,0);
   fflush(log_file);  
 }
 
@@ -247,12 +222,12 @@ static void log_event(const char *event_type, const char *filename, char *result
  * Returns 1 if access is allowed and 0 if denied
 */
 static int is_event_allowed(const char *event_type,const char *filename, pid_t pid, char* stage) {
-  // sending asking log_event
   if(is_file_excluded(filename)) return 1;
   if(is_process_external(pid)) return 0; // protecting from external access
   //return 1;
   pthread_mutex_lock( &socketblock );
-  
+
+  // sending asking log_event
   raw_log_event(event_type,filename,"ASKING",0,stage);
   char answer[8];
 
