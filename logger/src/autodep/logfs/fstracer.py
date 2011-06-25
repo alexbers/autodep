@@ -199,11 +199,12 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  #print "!"+"%d"%len(record)+"?"
 			  #print "datalen: %d" % len(data)
 			  message=record.split("\0")
-			  
+			  #print message
 			  
 			  try:
 				if message[4]=="ASKING":
 				  if filterproc(message[1],message[2],message[3]):
+					#print "Allowing an access to %s" % message[2]
 					s.sendall("ALLOW\n"); # TODO: think about flush here
 					
 				  else:
@@ -212,7 +213,8 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 					
 				else:
 				  eventname,filename,stage,result=message[1:5]
-				  #print message;
+				  #if stage != "unknown":
+				  
 
 				  if not stage in events:
 					events[stage]=[{},{}]

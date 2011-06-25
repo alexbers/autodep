@@ -21,7 +21,7 @@ class logger:
 
 	self.socketname=socketname
 	self.currpid=os.getpid()
-	
+
 	if accuracy==False:
 	  self.mountlist=self.mountlist+["/lib64/", "/lib32/","/var/tmp/portage/"]
 	
@@ -84,7 +84,7 @@ class logger:
 	if self.currpid!=os.getpid():
 	  print "Detected an attempt to execute execproc in other thread"
 	  sys.exit(1)
-	  
+
 	pid=os.fork()
 	if pid==0:
 	  try:
@@ -93,6 +93,7 @@ class logger:
 		os.chdir(cwd)
 		
 		env=os.environ.copy()
+		env["LOGGER_PROCESS_IS_INTERNAL"]="YES"
 
 		os.execvpe(prog_name, arguments, env)
 		sys.exit(1)

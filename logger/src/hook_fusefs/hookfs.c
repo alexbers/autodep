@@ -46,6 +46,8 @@
 #define MAXSOCKETPATHLEN 108
 #define MAXFILEBUFFLEN 2048
 
+#define MAXSTAGELEN 20
+
 #define IOBUFSIZE 65536
 
 
@@ -71,6 +73,8 @@ char *stagenames[]={
   "package","rpm","clean"
 };
 int stagenameslength=sizeof(stagenames)/sizeof(char *);
+
+static void log_event(const char*, const char*, char *,int , char* );
 
 /*
  * Get a pid of the parent proccess
@@ -115,51 +119,88 @@ pid_t getparentpid(pid_t pid){
 }
 
 /*
+ * Get an environment variable of remote process
+ * result is an output arg(can be NULL)
+*/
+static int getenv_by_pid(pid_t pid, char *envname,char *result,int result_len) {
+  char filename[MAXPATHLEN];
+  snprintf(filename,MAXPATHLEN, "/proc/%d/environ",pid);
+  FILE *environ_file_handle=fopen(filename,"r");
+
+  if(environ_file_handle==NULL)
+	return 0;
+
+  char filebuff[IOBUFSIZE];
+  
+  int automata_state=0;
+  int offset;
+  int envname_len=strlen(envname);
+
+  for(;;) {
+	int readed=fread(filebuff,1,IOBUFSIZE,environ_file_handle);
+	
+	for(offset=0; offset<readed; offset++) {
+	  char c=filebuff[offset];
+
+	  if(automata_state<envname_len) {
+		if(c==0) { automata_state=0;}
+		else if(automata_state==-1) continue;
+		else if(c==envname[automata_state]) automata_state++;
+		else automata_state=-1;	  
+	  } else if(automata_state==envname_len) {
+		if(result==NULL) {
+		  fclose(environ_file_handle);
+		  return 1;
+		}
+		if(c=='=') automata_state++;
+		else automata_state=-1;	
+	  } else if(automata_state>envname_len){
+		int result_off=automata_state-1-envname_len;
+		if(result_off>=result_len) {
+		  result[result_len-1]=0; // force last byte to be 0
+		  fclose(environ_file_handle);
+		  return 1;		  
+		} else {
+		  result[result_off]=c;
+		  if(c==0) {
+			fclose(environ_file_handle);
+			return 1;		  			
+		  }
+		  automata_state++;
+		}
+	  }
+	}
+	if(feof(environ_file_handle))
+	  break;
+  }
+  fclose(environ_file_handle);
+  return 0;
+}
+
+/*
  * Get a stage of building
 */
-static char * getstagebypid(pid_t pid, pid_t toppid) {
-  pid_t currpid;
-  for(currpid=getparentpid(pid); currpid!=0 && currpid!=1 && currpid!=toppid;currpid=getparentpid(currpid)) {
-	char filename[MAXPATHLEN];
-	snprintf(filename,MAXPATHLEN, "/proc/%d/cmdline",pid);
-	FILE *cmdline_file_handle=fopen(filename,"r");
-	
-	if(cmdline_file_handle==NULL)
-	  return "unknown";
-	
-	char read_buffer[MAXFILEBUFFLEN];
-	int readed;
-	readed=fread(read_buffer,sizeof(char),MAXFILEBUFFLEN,cmdline_file_handle);
-	
-	fclose(cmdline_file_handle);  
+static char * getstagebypid(pid_t pid) {
+  char stage[MAXSTAGELEN];
+  if(!getenv_by_pid(getparentpid(pid),"EBUILD_PHASE",stage,MAXSTAGELEN))
+	return "unknown";
 
-	int off;
-	int null_bytes_num=0;
-	char *stage_name;
-	// small automata here. For readabilyity it is not in classic form
-	for(off=0;off<readed;off++) {
-		if(read_buffer[off]==0){
-		  null_bytes_num++;
-		  if(null_bytes_num==2) {
-			if(read_buffer+off-9<read_buffer) // 9 is a "ebuild.sh" string length
-			  break;
-			if(strcmp(read_buffer+off-9,"ebuild.sh")!=0)
-			  break;
-			stage_name=read_buffer+off+1;	
-		  } else if(null_bytes_num==3) {
-			// ugly, but memory allocation is not better
-			// there is better way to write this
-			int i;
-			for(i=0; i<stagenameslength;i++) {
-			  if(strcmp(stage_name,stagenames[i])==0)
-				return stagenames[i];
-			}
-		  }
-		}
-	}
+  // ugly, but memory allocation is not better
+  // there is better way to write this, but this is fast
+  int i;
+  for(i=0; i<stagenameslength;i++) {
+	if(strcmp(stage,stagenames[i])==0)
+	  return stagenames[i];
   }
   
   return "unknown";
+}
+
+/*
+ * Check environment variable for process
+*/
+static int is_process_has_env(pid_t pid, char *envname) {
+  return getenv_by_pid(pid,envname,NULL,0);
 }
 
 /*
@@ -180,11 +221,18 @@ static int is_file_excluded(const char *filename) {
   return 0;
 }
 
+
 /*
  * Check external access - for example user's access to mount
 */ 
 static int is_process_external(pid_t pid) {
-  if(pid==1 || getparentpid(pid)==1)
+  pid_t ppid=getparentpid(pid);
+  if(pid==1 || ppid==1 || ppid==parent_pid)
+	return 0;
+
+  // ppid is here to bypass a deadlock on several kernels
+  // while trying to see environ but process is not executed yet
+  if( is_process_has_env(ppid,"LOGGER_PROCESS_IS_INTERNAL"))
 	return 0;
   
   for(;pid!=0;pid=getparentpid(pid))
@@ -270,7 +318,7 @@ static void give_to_creator_path(const char *path) {
 static int hookfs_getattr(const char *path, struct stat *stbuf)
 {
   	struct fuse_context * context = fuse_get_context();
-	char *stage=getstagebypid(context->pid,parent_pid);
+	char *stage=getstagebypid(context->pid);
 	
 	if(! is_event_allowed("stat",path,context->pid,stage)) {
 	  errno=2; // not found
@@ -303,7 +351,7 @@ static int hookfs_fgetattr(const char *path, struct stat *stbuf,
 	int res;
 
   	struct fuse_context * context = fuse_get_context();
-	char *stage=getstagebypid(context->pid,parent_pid);
+	char *stage=getstagebypid(context->pid);
 
 	if(! is_event_allowed("stat",path,context->pid,stage)) {
 	  errno=2; // not found
@@ -599,7 +647,7 @@ static int hookfs_chown(const char *path, uid_t uid, gid_t gid)
 static int hookfs_truncate(const char *path, off_t size)
 {
 	struct fuse_context * context = fuse_get_context();
-	char *stage=getstagebypid(context->pid,parent_pid);
+	char *stage=getstagebypid(context->pid);
 
 	char * rel_path = malloc_relative_path(path);
 	if (! rel_path) {
@@ -624,7 +672,7 @@ static int hookfs_ftruncate(const char *path, off_t size,
 	int res;
 
 	struct fuse_context * context = fuse_get_context();
-	char *stage=getstagebypid(context->pid,parent_pid);
+	char *stage=getstagebypid(context->pid);
 
 	res = ftruncate(fi->fh, size);
 
@@ -640,20 +688,14 @@ static int hookfs_ftruncate(const char *path, off_t size,
 static int hookfs_utimens(const char *path, const struct timespec ts[2])
 {
 	int res;
-	struct timeval tv[2];
 	char * rel_path = NULL;
-
-	tv[0].tv_sec = ts[0].tv_sec;
-	tv[0].tv_usec = ts[0].tv_nsec / 1000;
-	tv[1].tv_sec = ts[1].tv_sec;
-	tv[1].tv_usec = ts[1].tv_nsec / 1000;
 
 	rel_path = malloc_relative_path(path);
 	if (! rel_path) {
 		return -errno;
 	}
 
-	res = utimes(rel_path, tv);
+	res = utimensat(AT_FDCWD,rel_path, ts, AT_SYMLINK_NOFOLLOW);
 	free(rel_path);
 	if (res == -1)
 		return -errno;
@@ -689,7 +731,7 @@ static int open_safely(const char *rel_path, int flags, mode_t mode) {
 static int hookfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
 	struct fuse_context * context = fuse_get_context();
-  	char *stage=getstagebypid(context->pid,parent_pid);
+  	char *stage=getstagebypid(context->pid);
 
 	if(! is_event_allowed("create",path,context->pid,stage)) {
 	  errno=2; // not found
@@ -723,7 +765,7 @@ static int hookfs_open(const char *path, struct fuse_file_info *fi)
 	char * rel_path = NULL;
 
 	struct fuse_context * context = fuse_get_context();
-	char *stage=getstagebypid(context->pid,parent_pid);
+	char *stage=getstagebypid(context->pid);
 
 	if(! is_event_allowed("open",path,context->pid,stage)) {
 	  errno=2; // not found
@@ -756,7 +798,7 @@ static int hookfs_read(const char *path, char *buf, size_t size, off_t offset,
 	int res;
 
 	struct fuse_context * context = fuse_get_context();
-	char *stage=getstagebypid(context->pid,parent_pid);
+	char *stage=getstagebypid(context->pid);
 
 	res = pread(fi->fh, buf, size, offset);
 	if (res == -1) {
@@ -774,7 +816,7 @@ static int hookfs_write(const char *path, const char *buf, size_t size,
 	int res;
 
 	struct fuse_context * context = fuse_get_context();
-	char *stage=getstagebypid(context->pid,parent_pid);
+	char *stage=getstagebypid(context->pid);
 
 	res = pwrite(fi->fh, buf, size, offset);
 	if (res == -1) {
