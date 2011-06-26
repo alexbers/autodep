@@ -264,6 +264,7 @@ static void raw_log_event(const char *event_type, const char *filename, char *re
 */
 static void log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
   if(is_file_excluded(filename)) return;
+
 //  pthread_mutex_lock( &socketblock );
   raw_log_event(event_type,filename,result,err,stage);
 //  pthread_mutex_unlock( &socketblock );
@@ -281,7 +282,6 @@ static int is_event_allowed(const char *event_type,const char *filename, pid_t p
 
   // sending asking log_event
   raw_log_event(event_type,filename,"ASKING",0,stage);
-
   char answer[8];
   int bytes_recieved;
   bytes_recieved=recv(log_socket,answer,8,0);

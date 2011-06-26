@@ -12,7 +12,7 @@ if len(sys.argv)<2:
   print "Usage: showfsevents.py <command>"
   exit(1)
   
-events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:],approach="fusefs")
+events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:],approach="hooklib")
 print "Program finished, analyzing dependencies"
 # get unique filenames
 filenames={}

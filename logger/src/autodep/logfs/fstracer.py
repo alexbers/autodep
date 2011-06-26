@@ -155,34 +155,38 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	  print "Launch likely was unsuccessful"
 	  sys.exit(1)
 	else:
-	  input = [sock_listen]
+	  epoll=select.epoll()
+	  epoll.register(sock_listen.fileno(), select.EPOLLIN)
+
 	  connects = 0;
-	  	  
-	  while input:
-		inputready,_,_ = select.select(input,[],[],5)
-		
-		for s in inputready:
-		  #print "!! len: %d" % len(buffers)
-		  if s == sock_listen:
-			ret = s.accept()
+	  clients={}
+	  stop=0
+	  
+	  while stop==0:
+		sock_events = epoll.poll(3)
+		for fileno, sock_event in sock_events:
+		  if fileno == sock_listen.fileno():
+			ret = sock_listen.accept()
 			if ret is None:
 			  pass
 			else:
 			  (client,addr)=ret
 			  connects+=1; # client accepted
-			  input.append(client)
-		  else:
+			  epoll.register(client.fileno(), select.EPOLLIN)
+			  clients[client.fileno()]=client
+		  elif sock_event & select.EPOLLHUP:
+			epoll.unregister(fileno)
+			clients[fileno].close()
+			del clients[fileno]
+			connects-=1
+			
+			if connects==0:
+			  stop=1
+			  break
+		  elif sock_event & select.EPOLLIN:
+			s=clients[fileno]
 			record=s.recv(8192)
 			
-			if not record:
-			  s.close()
-			  input.remove(s)
-			  connects-=1;
-			  if connects==0:
-				input.remove(sock_listen)
-				sock_listen.close()
-			  continue
-						
 			message=record.split("\0")
 			#print message
 			
@@ -198,8 +202,6 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 				  
 			  else:
 				eventname,filename,stage,result=message[1:5]
-				#if stage != "unknown":
-				
 
 				if not stage in events:
 				  events[stage]=[{},{}]
@@ -235,19 +237,19 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  print "IndexError while parsing %s"%record
 
 		
-		if len(input)==1 and connects==0: #or 
-		  # seems like there is no connect
-		  print "It seems like a logger module was unable to start or failed to finish" + \
+		if len(sock_events)==0 and len(clients)==0: 
+		#  # seems like there is no connect
+		  print "It seems like a logger module was unable to start or failed to finish\n" + \
 				"Check that you are not launching a suid program under non-root user."
 		  return []
-		if len(inputready)==0 and iszombie(pid):
-		  print "Child finished, but connection remains. Closing a connection"
-		  break
+		if len(clients)==0 and iszombie(pid):
+		 break
 
 	  os.wait()
   
-  #if len(events)==0:
-	#return []
+	  epoll.unregister(sock_listen.fileno())
+	  epoll.close()
+	  sock_listen.close()
 	
   return events
 
