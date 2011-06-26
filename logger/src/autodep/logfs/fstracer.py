@@ -126,10 +126,12 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
   socketname = os.path.join(tmpdir, 'socket')
 
   try:
-	sock_listen=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+	#sock_listen=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+	sock_listen=socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+
 	sock_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 	sock_listen.bind(socketname)
-	sock_listen.listen(65536)
+	sock_listen.listen(1024)
   except socket.error, e:
     print "Failed to create a socket for exchange data with the logger: %s" % e
     return []
@@ -155,9 +157,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	else:
 	  input = [sock_listen]
 	  connects = 0;
-	  
-	  buffers = {}
-	  
+	  	  
 	  while input:
 		inputready,_,_ = select.select(input,[],[],5)
 		
@@ -171,83 +171,68 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  (client,addr)=ret
 			  connects+=1; # client accepted
 			  input.append(client)
-			  buffers[client]=""
 		  else:
-			data=s.recv(65536)
+			record=s.recv(8192)
 			
-			buffers[s]+=data
-			  
-			if not data:
+			if not record:
 			  s.close()
 			  input.remove(s)
-			  del buffers[s]
 			  connects-=1;
 			  if connects==0:
 				input.remove(sock_listen)
 				sock_listen.close()
 			  continue
 						
-			if not "\0\0" in buffers[s]:
-			  continue
-			  
-			data,buffers[s] = buffers[s].rsplit("\0\0",1)
+			message=record.split("\0")
+			#print message
 			
-			for record in data.split("\0\0"):
-			  if len(record)==0:
-				continue
-			  # TODO: check array
-			  #print "!"+"%d"%len(record)+"?"
-			  #print "datalen: %d" % len(data)
-			  message=record.split("\0")
-			  #print message
-			  
-			  try:
-				if message[4]=="ASKING":
-				  if filterproc(message[1],message[2],message[3]):
-					#print "Allowing an access to %s" % message[2]
-					s.sendall("ALLOW\n"); # TODO: think about flush here
-					
-				  else:
-					print "Blocking an access to %s" % message[2]
-					s.sendall("DENY\n"); # TODO: think about flush here
-					
+			try:
+			  if message[4]=="ASKING":
+				if filterproc(message[1],message[2],message[3]):
+				  #print "Allowing an access to %s" % message[2]
+				  s.sendall("ALLOW"); # TODO: think about flush here
+				  
 				else:
-				  eventname,filename,stage,result=message[1:5]
-				  #if stage != "unknown":
+				  print "Blocking an access to %s" % message[2]
+				  s.sendall("DENY"); # TODO: think about flush here
 				  
+			  else:
+				eventname,filename,stage,result=message[1:5]
+				#if stage != "unknown":
+				
 
-				  if not stage in events:
-					events[stage]=[{},{}]
+				if not stage in events:
+				  events[stage]=[{},{}]
+				
+				hashofsucesses=events[stage][0]
+				hashoffailures=events[stage][1]
+				
+				if result=="OK":
+				  if not filename in hashofsucesses:
+					hashofsucesses[filename]=[False,False]
 				  
-				  hashofsucesses=events[stage][0]
-				  hashoffailures=events[stage][1]
+				  readed_or_writed=hashofsucesses[filename]
 				  
-				  if result=="OK":
-					if not filename in hashofsucesses:
-					  hashofsucesses[filename]=[False,False]
+				  if eventname=="read":
+					readed_or_writed[0]=True
+				  elif eventname=="write":
+					readed_or_writed[1]=True
 					
-					readed_or_writed=hashofsucesses[filename]
-					
-					if eventname=="read":
-					  readed_or_writed[0]=True
-					elif eventname=="write":
-					  readed_or_writed[1]=True
-					  
-				  elif result[0:3]=="ERR" or result=="DENIED":
-					if not filename in hashoffailures:
-					  hashoffailures[filename]=[False,False]
-					notfound_or_blocked=hashoffailures[filename]
-					
-					if result=="ERR/2":
-					  notfound_or_blocked[0]=True
-					elif result=="DENIED":
-					  notfound_or_blocked[1]=True
+				elif result[0:3]=="ERR" or result=="DENIED":
+				  if not filename in hashoffailures:
+					hashoffailures[filename]=[False,False]
+				  notfound_or_blocked=hashoffailures[filename]
+				  
+				  if result=="ERR/2":
+					notfound_or_blocked[0]=True
+				  elif result=="DENIED":
+					notfound_or_blocked[1]=True
 
-				  else:
-					print "Error in logger module<->analyser protocol"
-				  
-			  except IndexError:
-				print "IndexError while parsing %s"%record
+				else:
+				  print "Error in logger module<->analyser protocol"
+				
+			except IndexError:
+			  print "IndexError while parsing %s"%record
 
 		
 		if len(input)==1 and connects==0: #or 
@@ -264,9 +249,5 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
   #if len(events)==0:
 	#return []
 	
-  #timeofstart=int(events[0][0])
-  # make all event times relative to time 0 - time of start task
-  #for event_num in range(0,len(events)):
-	#events[event_num][0]=int(events[event_num][0])-timeofstart
   return events
 

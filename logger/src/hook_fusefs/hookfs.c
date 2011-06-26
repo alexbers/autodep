@@ -46,6 +46,8 @@
 #define MAXSOCKETPATHLEN 108
 #define MAXFILEBUFFLEN 2048
 
+#define MAXSOCKETMSGLEN 8192
+
 #define MAXSTAGELEN 20
 
 #define IOBUFSIZE 65536
@@ -60,7 +62,7 @@ pthread_mutex_t socketblock = PTHREAD_MUTEX_INITIALIZER;
 
 int mountpoint_fd = -1;
 char *mountpoint = NULL;
-FILE * log_file = NULL;
+//FILE * log_file = NULL;
 int log_socket=-1;
 struct hookfs_config config;
 
@@ -243,15 +245,18 @@ static int is_process_external(pid_t pid) {
 }
 
 static void raw_log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
-  fprintf(log_file,"%lld%c",(unsigned long long)time(NULL),0);
-  fprintf(log_file,"%s%c%s%c%s%c",event_type,0,filename,0,stage,0);
+  char msg_buff[MAXSOCKETMSGLEN];
+  int bytes_to_send;
+  if(strcmp(result,"ERR")==0) {
+	bytes_to_send=snprintf(msg_buff,MAXSOCKETMSGLEN,"%lld%c%s%c%s%c%s%c%s/%d",
+	  (unsigned long long)time(NULL),0,event_type,0,filename,0,stage,0,result,err);
+  } else {
+	bytes_to_send=snprintf(msg_buff,MAXSOCKETMSGLEN,"%lld%c%s%c%s%c%s%c%s",
+	  (unsigned long long)time(NULL),0,event_type,0,filename,0,stage,0,result);	
+  }
   
-  if(strcmp(result,"ERR")==0)
-	fprintf(log_file,"%s/%d",result,err);
-  else
-	fprintf(log_file,"%s",result);
-
-  fprintf(log_file,"%c%c",0,0);
+  if(bytes_to_send>=MAXSOCKETMSGLEN) return;
+  send(log_socket,msg_buff,bytes_to_send,0);
 }
 
 /*
@@ -259,11 +264,9 @@ static void raw_log_event(const char *event_type, const char *filename, char *re
 */
 static void log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
   if(is_file_excluded(filename)) return;
-
-  pthread_mutex_lock( &socketblock );
+//  pthread_mutex_lock( &socketblock );
   raw_log_event(event_type,filename,result,err,stage);
-
-  pthread_mutex_unlock( &socketblock );
+//  pthread_mutex_unlock( &socketblock );
 }
 
 /*
@@ -278,17 +281,19 @@ static int is_event_allowed(const char *event_type,const char *filename, pid_t p
 
   // sending asking log_event
   raw_log_event(event_type,filename,"ASKING",0,stage);
-  fflush(log_file);
-  char answer[8];
 
-  fscanf(log_file,"%7s",answer);
+  char answer[8];
+  int bytes_recieved;
+  bytes_recieved=recv(log_socket,answer,8,0);
+  
+  //fscanf(log_file,"%7s",answer);
   pthread_mutex_unlock( &socketblock );
   
   if(strcmp(answer,"ALLOW")==0)
 	return 1;
   else if(strcmp(answer,"DENY")==0)
 	return 0;
-  else
+  else 
 	fprintf(stderr,"Protocol error, text should be ALLOW or DENY, got: %s",answer);
   return 0;
 }
@@ -972,7 +977,7 @@ static void * hookfs_init(struct fuse_conn_info *conn) {
 }
 
 static void hookfs_destroy() {
-	fflush(log_file);
+//	fflush(log_file);
 }
 
 static struct fuse_operations hookfs_oper = {
@@ -1124,45 +1129,45 @@ int main(int argc, char *argv[]) {
   
   char *log_socket_name=getenv("LOG_SOCKET");
   if(log_socket_name==NULL) {
-	  fprintf(stderr,"Using stderr as output for logs "
-			  "because the LOG_SOCKET environment variable isn't defined.\n");
-	  log_file=stderr;
-  } else {
-	if(strlen(log_socket_name)>=MAXSOCKETPATHLEN) {
-	  fprintf(stderr,"Unable to create a unix-socket %s: socket name is too long,exiting\n", log_socket_name);
+	  fprintf(stderr,"LOG_SOCKET environment variable isn't defined."
+			  "Are this library launched by server?\n");
 	  return 1;
-	}
-
-	log_socket=socket(AF_UNIX, SOCK_STREAM, 0);
-	if(log_socket==-1) {
-	  fprintf(stderr,"Unable to create a unix-socket %s: %s\n", log_socket_name, strerror(errno));
-	  return 1;
-	}
-	
-	struct sockaddr_un serveraddr;
-	memset(&serveraddr, 0, sizeof(serveraddr));
-	serveraddr.sun_family = AF_UNIX;
-	strcpy(serveraddr.sun_path, log_socket_name);
-	
-	int ret=connect(log_socket, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr));
-	if(ret==-1) {
-	  fprintf(stderr,"Unable to connect a unix-socket: %s\n", strerror(errno));
-	  return 1;
-	}
-	
-	log_file=fdopen(log_socket,"a+");
-	
-	if(log_file==NULL) {
-	  fprintf(stderr,"Unable to open a socket for a steam writing: %s\n", strerror(errno));
-	  exit(1);
-	}
-	
-	ret=setvbuf(log_file,NULL,_IOFBF,IOBUFSIZE);
-	if(ret!=0){
-	  fprintf(stderr,"Unable to set a size of io buffer");
-	  exit(1);
-	} 
+  } 
+  
+  if(strlen(log_socket_name)>=MAXSOCKETPATHLEN) {
+	fprintf(stderr,"Unable to create a unix-socket %s: socket name is too long,exiting\n", log_socket_name);
+	return 1;
   }
+
+  log_socket=socket(AF_UNIX, SOCK_SEQPACKET, 0);
+  if(log_socket==-1) {
+	fprintf(stderr,"Unable to create a unix-socket %s: %s\n", log_socket_name, strerror(errno));
+	return 1;
+  }
+  
+  struct sockaddr_un serveraddr;
+  memset(&serveraddr, 0, sizeof(serveraddr));
+  serveraddr.sun_family = AF_UNIX;
+  strcpy(serveraddr.sun_path, log_socket_name);
+  
+  int ret=connect(log_socket, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr));
+  if(ret==-1) {
+	fprintf(stderr,"Unable to connect a unix-socket: %s\n", strerror(errno));
+	return 1;
+  }
+    
+  //log_file=fdopen(log_socket,"a+");
+  
+  //if(log_file==NULL) {
+	//fprintf(stderr,"Unable to open a socket for a steam writing: %s\n", strerror(errno));
+	//exit(1);
+  //}
+  
+  //ret=setvbuf(log_file,NULL,_IOFBF,IOBUFSIZE);
+  //if(ret!=0){
+	//fprintf(stderr,"Unable to set a size of io buffer");
+	//exit(1);
+  //} 
   
   if (! try_chdir_to_mountpoint(args.argc, args.argv)) {
 	  return 1;
@@ -1170,7 +1175,7 @@ int main(int argc, char *argv[]) {
 
   umask(0);
   int res = fuse_main(args.argc, args.argv, &hookfs_oper, NULL);
-  fflush(log_file);
-  fclose(log_file);
+  //fflush(log_file);
+  //fclose(log_file);
   return res;
 }

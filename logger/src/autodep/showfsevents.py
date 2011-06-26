@@ -25,11 +25,13 @@ for stage in events:
 	filenames[filename]=""
 filenames=filenames.keys();
 
-file_to_package=logfs.portage_utils.getpackagesbyfiles(filenames)
+# temporary disabled
+#file_to_package=logfs.portage_utils.getpackagesbyfiles(filenames)
+file_to_package={}
 #print events
 
-stagesorder={"setup":1,"unpack":2,"prepare":3,"compile":4,"test":5,
-			 "src_install":6,"preinst":7,"postinst":8, "unknown":9}
+stagesorder={"clean":1,"setup":2,"unpack":3,"prepare":4,"configure":5,"compile":6,"test":7,
+			 "install":8,"preinst":9,"postinst":10,"prerm":11,"postrm":12,"unknown":13}
 
 for stage in sorted(events, key=stagesorder.get):
   succ_events=events[stage][0]
