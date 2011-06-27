@@ -5,6 +5,7 @@ This module is a bridge between low-level logging services and high level handli
 
 import os
 import sys
+import stat
 import time
 import tempfile
 import socket
@@ -132,6 +133,10 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	sock_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 	sock_listen.bind(socketname)
 	sock_listen.listen(1024)
+	# enable connect a socket for anyone
+	os.chmod(tmpdir,stat.S_IRUSR|stat.S_IWUSR|stat.S_IXUSR|stat.S_IROTH|stat.S_IWOTH|stat.S_IXOTH)
+	os.chmod(socketname,stat.S_IRUSR|stat.S_IWUSR|stat.S_IROTH|stat.S_IWOTH)
+
   except socket.error, e:
     print "Failed to create a socket for exchange data with the logger: %s" % e
     return []
@@ -161,6 +166,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	  connects = 0;
 	  clients={}
 	  stop=0
+	  was_first_connect=False
 	  
 	  while stop==0:
 		sock_events = epoll.poll(3)
@@ -172,20 +178,26 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			else:
 			  (client,addr)=ret
 			  connects+=1; # client accepted
+			  was_first_connect=True
 			  epoll.register(client.fileno(), select.EPOLLIN)
 			  clients[client.fileno()]=client
-		  elif sock_event & select.EPOLLHUP:
-			epoll.unregister(fileno)
-			clients[fileno].close()
-			del clients[fileno]
-			connects-=1
+		  #elif sock_event & select.EPOLLHUP:
+			#epoll.unregister(fileno)
+			#clients[fileno].close()
+			#del clients[fileno]
+			#connects-=1
 			
-			if connects==0:
-			  stop=1
-			  break
 		  elif sock_event & select.EPOLLIN:
 			s=clients[fileno]
 			record=s.recv(8192)
+			
+			if not record: # if connection was closed
+			  epoll.unregister(fileno)
+			  clients[fileno].close()
+			  del clients[fileno]
+			  connects-=1
+			  #print "closing!!"
+			  continue
 			
 			message=record.split("\0")
 			#print message
@@ -194,11 +206,11 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  if message[4]=="ASKING":
 				if filterproc(message[1],message[2],message[3]):
 				  #print "Allowing an access to %s" % message[2]
-				  s.sendall("ALLOW"); # TODO: think about flush here
+				  s.sendall("ALLOW\0"); # TODO: think about flush here
 				  
 				else:
 				  print "Blocking an access to %s" % message[2]
-				  s.sendall("DENY"); # TODO: think about flush here
+				  s.sendall("DENY\0"); # TODO: think about flush here
 				  
 			  else:
 				eventname,filename,stage,result=message[1:5]
@@ -236,7 +248,9 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			except IndexError:
 			  print "IndexError while parsing %s"%record
 
-		
+		if was_first_connect and connects==0:
+		  break
+
 		if len(sock_events)==0 and len(clients)==0: 
 		#  # seems like there is no connect
 		  print "It seems like a logger module was unable to start or failed to finish\n" + \
