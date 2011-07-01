@@ -132,10 +132,10 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 
 	sock_listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 	sock_listen.bind(socketname)
-	sock_listen.listen(1024)
+	sock_listen.listen(64)
 	# enable connect a socket for anyone
 	os.chmod(tmpdir,stat.S_IRUSR|stat.S_IWUSR|stat.S_IXUSR|stat.S_IROTH|stat.S_IWOTH|stat.S_IXOTH)
-	os.chmod(socketname,stat.S_IRUSR|stat.S_IWUSR|stat.S_IROTH|stat.S_IWOTH)
+	os.chmod(socketname,stat.S_IRUSR|stat.S_IWUSR|stat.S_IXUSR|stat.S_IROTH|stat.S_IWOTH|stat.S_IXOTH)
 
   except socket.error, e:
     print "Failed to create a socket for exchange data with the logger: %s" % e
@@ -168,19 +168,26 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 	  stop=0
 	  was_first_connect=False
 	  
+	  #print "fileno listen: %d",sock_listen.fileno()
+	  
 	  while stop==0:
 		sock_events = epoll.poll(3)
 		for fileno, sock_event in sock_events:
 		  if fileno == sock_listen.fileno():
+			#print "\n\nEVENT\n\n"
 			ret = sock_listen.accept()
+			#print ret
 			if ret is None:
+			#  print "\n\nPASS\n\n"
 			  pass
 			else:
 			  (client,addr)=ret
+			 # print client
 			  connects+=1; # client accepted
 			  was_first_connect=True
 			  epoll.register(client.fileno(), select.EPOLLIN)
 			  clients[client.fileno()]=client
+			  #print "opened %d" % client.fileno()
 		  #elif sock_event & select.EPOLLHUP:
 			#epoll.unregister(fileno)
 			#clients[fileno].close()
@@ -196,7 +203,7 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 			  clients[fileno].close()
 			  del clients[fileno]
 			  connects-=1
-			  #print "closing!!"
+			  #print "closed %d"%fileno
 			  continue
 			
 			message=record.split("\0")
@@ -258,12 +265,14 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 		  return []
 		if len(clients)==0 and iszombie(pid):
 		 break
+	  
+	  #print "\n\nRETURNING!!!!\n\n"
+  
 
 	  os.wait()
   
 	  epoll.unregister(sock_listen.fileno())
 	  epoll.close()
 	  sock_listen.close()
-	
   return events
 

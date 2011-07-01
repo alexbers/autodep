@@ -14,6 +14,7 @@ if len(sys.argv)<2:
   
 events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:],approach="hooklib")
 print "Program finished, analyzing dependencies"
+#exit(0);
 # get unique filenames
 filenames={}
 for stage in events:
