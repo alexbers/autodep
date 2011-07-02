@@ -20,3 +20,4 @@ class logger:
 	except OSError, e:
 	  print "Failed to launch the programm: %s" % e
 	  sys.exit(1)
+

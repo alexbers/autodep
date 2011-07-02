@@ -12,9 +12,9 @@ if len(sys.argv)<2:
   print "Usage: showfsevents.py <command>"
   exit(1)
   
-events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:],approach="hooklib")
+events=logfs.fstracer.getfsevents(sys.argv[1], sys.argv[1:],approach="fusefs")
 print "Program finished, analyzing dependencies"
-#exit(0);
+exit(0);
 # get unique filenames
 filenames={}
 for stage in events:
@@ -27,8 +27,8 @@ for stage in events:
 filenames=filenames.keys();
 
 # temporary disabled
-file_to_package=logfs.portage_utils.getpackagesbyfiles(filenames)
-#file_to_package={}
+#file_to_package=logfs.portage_utils.getpackagesbyfiles(filenames)
+file_to_package={}
 #print events
 
 stagesorder={"clean":1,"setup":2,"unpack":3,"prepare":4,"configure":5,"compile":6,"test":7,

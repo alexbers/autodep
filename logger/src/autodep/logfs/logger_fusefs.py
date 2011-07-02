@@ -4,6 +4,8 @@ import subprocess
 import time
 import os
 import sys
+import signal
+
 
 
 class logger:
@@ -47,6 +49,7 @@ class logger:
 	os.environ["LOG_SOCKET"]=self.socketname
 	os.environ["PARENT_PID"]=str(self.currpid)
 
+	# TODO: change
 	ret=subprocess.call(['/home/bay/gsoc/logger/src/hook_fusefs/hookfs',self.rootmountpath,
 						 '-o','allow_other,suid'])
 	if ret!=0:
@@ -102,7 +105,12 @@ class logger:
 		sys.exit(1)
 	  
 	else:
-	  exitcode=os.wait()[1];
+	  exitcode=2; # if ctrl-c pressed then returning this value
+	  needtokillself=False
+	  try:
+		exitcode=os.wait()[1]/256;
+	  except KeyboardInterrupt:
+		needtokillself=True
 	  try:
 		print "Unmounting partitions"
 		self.mountlist.reverse()
@@ -118,4 +126,7 @@ class logger:
 		print "Error while unmounting fuse filesystem: %s" % e
 		sys.exit(1)
 		
-	  sys.exit(int(exitcode/256))
+	  if needtokillself: # we kill self for report the status correct
+		signal.signal(signal.SIGINT,signal.SIG_DFL)
+		os.kill(os.getpid(),signal.SIGINT)
+	  os._exit(exitcode)
