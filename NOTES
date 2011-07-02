@@ -19,3 +19,25 @@ This is few notes mainly for myself.
    <stage of building>:{<filename>:[<was not found>,<was blocked>]}
   }
  ]
+
+4. Format of converted events structure:
+ {
+  packagesinfo: {
+   <package>: {
+    stage: {
+     <filename>:
+      {found:[<was readed>,<was writed>],
+       notfound:[<was not found>,<was blocked>]}
+    }
+   }
+  }
+  
+  otherfilesinfo: {
+   stage:{
+    <filename>:
+	 {found:[<was readed>,<was writed>],
+	 notfound:[<was not found>,<was blocked>]}
+   }
+  }
+ }
+
