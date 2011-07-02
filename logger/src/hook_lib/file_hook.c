@@ -52,9 +52,61 @@ int (*_close)(int fd); // we hooking this, because some programs closes our sock
 
 int log_socket=-1;
 
-char log_socket_orig[MAXSOCKETPATHLEN];
+char log_socket_name[MAXSOCKETPATHLEN];
 
-void __doinit(){
+void __doconnect(){
+  if(strlen(log_socket_name)>=MAXSOCKETPATHLEN) {
+	fprintf(stderr,"Unable to create a unix-socket %s: socket name is too long,exiting\n", log_socket_name);
+	exit(1);
+  }
+	  
+  log_socket=socket(AF_UNIX, SOCK_SEQPACKET, 0);
+  if(log_socket==-1) {
+	fprintf(stderr,"Unable to create a unix-socket %s: %s\n", log_socket_name, strerror(errno));
+	exit(1);
+  }
+  
+  struct sockaddr_un serveraddr;
+  memset(&serveraddr, 0, sizeof(serveraddr));
+  serveraddr.sun_family = AF_UNIX;
+  strcpy(serveraddr.sun_path, log_socket_name);
+  
+
+  int ret=connect(log_socket, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr));
+  if(ret==-1) {
+	fprintf(stderr,"Unable to connect a unix-socket %s: %s\n",log_socket_name, strerror(errno));
+	fflush(stderr);
+	//execlp("/bin/bash","/bin/bash",NULL);
+	exit(1);
+  }
+}
+
+void __dodisconnect() {
+  close(log_socket); 
+}
+
+void __doreconnect() {
+  __doconnect();
+  __dodisconnect();
+}
+
+// this fucnction executes when library is loaded
+void _init() {
+  char *log_socket_env=getenv("LOG_SOCKET");
+  
+  if(log_socket_env==NULL) {
+	fprintf(stderr,"LOG_SOCKET environment variable isn't defined."
+					"Are this library launched by server?\n");
+	exit(1);
+  }
+
+  if(strlen(log_socket_env)>=MAXSOCKETPATHLEN) {
+	fprintf(stderr,"Unable to create a unix-socket %s: socket name is too long,exiting\n", log_socket_name);
+	exit(1);
+  }
+  strcpy(log_socket_name,log_socket_env);
+
+
   _open = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open");
   _open64 = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open64");
 
@@ -87,63 +139,17 @@ void __doinit(){
 	  exit(1);
   }
   
-  
-  char *log_socket_name=getenv("LOG_SOCKET");
-  
-  if(log_socket_name==NULL) {
-	fprintf(stderr,"LOG_SOCKET environment variable isn't defined."
-					"Are this library launched by server?\n");
-
-	exit(1);
-  }
-  strcpy(log_socket_orig,getenv("LOG_SOCKET"));
-  //fprintf(stderr,"%d %s\n",getpid(),log_socket_name);
-
-
-  if(strlen(log_socket_name)>=MAXSOCKETPATHLEN) {
-	fprintf(stderr,"Unable to create a unix-socket %s: socket name is too long,exiting\n", log_socket_name);
-	exit(1);
-  }
-	  
-  log_socket=socket(AF_UNIX, SOCK_SEQPACKET, 0);
-  if(log_socket==-1) {
-	fprintf(stderr,"Unable to create a unix-socket %s: %s\n", log_socket_name, strerror(errno));
-	exit(1);
-  }
-  
-  struct sockaddr_un serveraddr;
-  memset(&serveraddr, 0, sizeof(serveraddr));
-  serveraddr.sun_family = AF_UNIX;
-  strcpy(serveraddr.sun_path, log_socket_name);
-  
-
-  int ret=connect(log_socket, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr));
-  if(ret==-1) {
-	fprintf(stderr,"Unable to connect a unix-socket %d %s: %s\n", getpid(),log_socket_name, strerror(errno));
-	fflush(stderr);
-	//execlp("/bin/bash","/bin/bash",NULL);
-	exit(1);
-  }
-}
-
-void __dofini() {
-  close(log_socket); 
-}
-
-void _init() {
-  __doinit();
+  __doconnect();
 } 
 
 void _fini() {
-  __dofini();
+  __dodisconnect();
 }
 
 /*
  * Format of log string: time event filename stage result/err
 */
 static int __raw_log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
-  //printf("lololo:%s %s %s\n",event_type,filename,stage);
-
   char msg_buff[MAXSOCKETMSGLEN];
   int bytes_to_send;
   if(strcmp(result,"ERR")==0) {
@@ -157,8 +163,13 @@ static int __raw_log_event(const char *event_type, const char *filename, char *r
   if(bytes_to_send>=MAXSOCKETMSGLEN) 
 	return 0;
   
-  if(send(log_socket,msg_buff,bytes_to_send,0)==-1) 
-	return 0;
+  if(send(log_socket,msg_buff,bytes_to_send,0)==-1) {
+	__doreconnect(); // looks like our socket has been destroyed by logged program
+					 // try to recreate it
+
+	if(send(log_socket,msg_buff,bytes_to_send,0)==-1)
+	  return 0;
+  }
   
   return 1;
 }
@@ -167,7 +178,10 @@ static int __raw_log_event(const char *event_type, const char *filename, char *r
  * Log an event
 */
 static int __log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
-  return __raw_log_event(event_type,filename,result,err,stage);
+  pthread_mutex_lock( &socketblock );
+  int ret=__raw_log_event(event_type,filename,result,err,stage);
+  pthread_mutex_unlock( &socketblock );
+  return ret;
 }
 
 /*
@@ -206,15 +220,21 @@ static int __is_event_allowed(const char *event_type,const char *filename, char*
   __raw_log_event(event_type,filename,"ASKING",0,stage);
   bytes_recieved=recv(log_socket,answer,8,0);
 
+  if(bytes_recieved==-1) {
+	__doreconnect(); // looks like our socket has been destroyed by logged program
+				   // try to recreate it
+	bytes_recieved=recv(log_socket,answer,8,0);
+  }
+  
   pthread_mutex_unlock( &socketblock );
   
-  if(strcmp(answer,"ALLOW")==0)
+  if(strcmp(answer,"ALLOW")==0) {
 	return 1;
-  else if(strcmp(answer,"DENY")==0)
+  } else if(strcmp(answer,"DENY")==0)
 	return 0;
   else {
-	fprintf(stderr,"Protocol error, text should be ALLOW or DENY, got: %s",answer);
-  
+	fprintf(stderr,"Protocol error, text should be ALLOW or DENY, got: '%s' recv retcode=%d(%s)"
+			" socket=%d",answer,bytes_recieved,strerror(errno),log_socket);
 	exit(1);
   }
   return 0;
@@ -231,18 +251,15 @@ int open(const char * path, int flags, mode_t mode) {
 	  __log_event("open",fullpath,"DENIED",errno,stage);
 	  return -1;
 	}
-
 	
-    //if(flags & O_CREAT)
-        ret=_open(path, flags, mode);
-    //else
-    //    ret=_open(path, flags, 0);
+    ret=_open(path, flags, mode);
+	int saved_errno=errno;
 
 	if(ret==-1)
 	  __log_event("open",fullpath,"ERR",errno,stage);
 	else
-	  __log_event("open",fullpath,"OK",0,stage);
-	  
+	  __log_event("open",fullpath,"OK",0,stage);	  
+	errno=saved_errno;
 	
 	return ret;
 }
@@ -258,15 +275,14 @@ int open64(const char * path, int flags, mode_t mode) {
 	  return -1;
 	}
 	
-    if(flags & O_CREAT)
-        ret=_open64(path, flags, mode);
-    else
-        ret=_open64(path, flags, 0);
-	
+    ret=_open64(path, flags, mode);
+
+	int saved_errno=errno;
 	if(ret==-1)
 	  __log_event("open",fullpath,"ERR",errno,stage);
 	else
 	  __log_event("open",fullpath,"OK",0,stage);
+	errno=saved_errno;
 	
 	return ret;
 }
@@ -284,10 +300,12 @@ FILE *fopen(const char *path, const char *mode) {
 	}
 
 	ret=_fopen(path,mode);
+	int saved_errno=errno;
 	if(ret==NULL)
 	  __log_event("open",fullpath,"ERR",errno,stage);
 	else
 	  __log_event("open",fullpath,"OK",0,stage);
+	errno=saved_errno;
 	return ret;
 }
 
@@ -304,45 +322,48 @@ FILE *fopen64(const char *path, const char *mode) {
 	}
 
 	ret=_fopen64(path,mode);
+	int saved_errno=errno;
 
 	if(ret==NULL)
 	  __log_event("open",fullpath,"ERR",errno,stage);
 	else
 	  __log_event("open",fullpath,"OK",0,stage);
 
+	errno=saved_errno;
 	return ret;
 }
 
 ssize_t read(int fd, void *buf, size_t count){
   ssize_t ret=_read(fd,buf,count);
+  int saved_errno=errno;
   char *stage=__get_stage();
 
   char fullpath[MAXPATHLEN];
   ssize_t path_size=__get_path_by_fd(fd,fullpath,MAXPATHLEN);
-  if(path_size==-1)
-	return ret;
-  
-  if(ret==-1)
-	__log_event("read",fullpath,"ERR",errno,stage);
-  else
-	__log_event("read",fullpath,"OK",0,stage);
-
+  if(path_size!=-1) {
+	if(ret==-1)
+	  __log_event("read",fullpath,"ERR",errno,stage);
+	else
+	  __log_event("read",fullpath,"OK",0,stage);
+  }
+  errno=saved_errno;
   return ret;
 }
 
 ssize_t write(int fd,const void *buf, size_t count){
   ssize_t ret=_write(fd,buf,count);
+  int saved_errno=errno;
   char *stage=__get_stage();
   char fullpath[MAXPATHLEN];
   ssize_t path_size=__get_path_by_fd(fd,fullpath,MAXPATHLEN);
-  if(path_size==-1)
-	return ret;
+  if(path_size!=-1){
+	if(ret==-1)
+	  __log_event("write",fullpath,"ERR",errno,stage);
+	else
+	  __log_event("write",fullpath,"OK",0,stage);
+  }
   
-  if(ret==-1)
-	__log_event("write",fullpath,"ERR",errno,stage);
-  else
-	__log_event("write",fullpath,"OK",0,stage);
-
+  errno=saved_errno;
   return ret;
 }
 
@@ -350,21 +371,22 @@ pid_t fork(void) {
   //fprintf(stderr,"prefork %s %s\n",getenv("LOG_SOCKET"),log_socket_orig);
 
   //int succ=
-  setenv("LOG_SOCKET",log_socket_orig,1);
+  _setenv("LOG_SOCKET",log_socket_name,1);
   
   //fprintf(stderr,"prefork %s%p%p%d %s\n",getenv("LOG_SOCKET"),_setenv,setenv,succ,log_socket_orig);
 
   int ret=_fork();
+  int saved_errno=errno;
   // we must to handle fork for reconnect a socket
   
   if(ret==0) {
-
-	__dofini(); // reinit connection for clildren
-    __doinit(); // because now it is different processes
+	__doreconnect(); // reinit connection for children
+					 // because now it is different processes
   } else {
 	//fprintf(stderr,"fork new: %d LOG_SOCKET=%s\n", ret,getenv("LOG_SOCKET"));
 	//sleep(3);
   }
+  errno=saved_errno;
   return ret;
 }
 
@@ -388,12 +410,12 @@ int execve(const char *filename, char *const argv[],
 	  if(strcmp(envp[i]+11,getenv("LD_PRELOAD"))==0) 
 		ld_preload_valid=1;
 	if(strncmp(envp[i],"LOG_SOCKET=",11)==0)
-	  if(strcmp(envp[i]+11,log_socket_orig)==0) 
+	  if(strcmp(envp[i]+11,log_socket_name)==0) 
 		log_socket_valid=1;
   }
   if(!ld_preload_valid || !log_socket_valid) {
 	snprintf(new_ld_preload,MAXENVITEMSIZE,"LD_PRELOAD=%s",getenv("LD_PRELOAD"));
-	snprintf(new_log_socket,MAXENVITEMSIZE,"LOG_SOCKET=%s",log_socket_orig);
+	snprintf(new_log_socket,MAXENVITEMSIZE,"LOG_SOCKET=%s",log_socket_name);
 	for(i=0; envp[i] && i<MAXENVSIZE-3; i++) {
 	  if(strncmp(envp[i],"LD_PRELOAD=",11)==0) {
 		new_envp[i]=new_ld_preload;
@@ -413,7 +435,7 @@ int execve(const char *filename, char *const argv[],
 	if(!log_socket_valid) {
 	  new_envp[i]=new_log_socket;
 	  i++;
-	}
+}	
 	new_envp[i]=NULL;
 	envp=new_envp;
 //	for(i=0;envp[i];i++){

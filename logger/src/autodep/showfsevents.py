@@ -27,8 +27,8 @@ for stage in events:
 filenames=filenames.keys();
 
 # temporary disabled
-#file_to_package=logfs.portage_utils.getpackagesbyfiles(filenames)
-file_to_package={}
+file_to_package=logfs.portage_utils.getpackagesbyfiles(filenames)
+#file_to_package={}
 #print events
 
 stagesorder={"clean":1,"setup":2,"unpack":3,"prepare":4,"configure":5,"compile":6,"test":7,
