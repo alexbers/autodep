@@ -74,7 +74,7 @@ def getparentpid(pid):
 	if match==None:
 	  print "Failed to get parent process. Format of /proc/<pid>/stat is incorrect. Did you change a kernel?"
 	  return 1
-	
+	 
 	return int(match.group(1))
 	
   except IOError,e:
@@ -200,8 +200,9 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 				continue
 			  
 			  message=record.split("\0")
-			  #if message[3]!="unknown":
+			  #if message[3]=="compile": #and message[1]=="debug":
 				#print message
+			  
 			  
 			  try:
 				if message[4]=="ASKING":

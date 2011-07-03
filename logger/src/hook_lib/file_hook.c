@@ -53,6 +53,7 @@ int (*_close)(int fd); // we hooking this, because some programs closes our sock
 int log_socket=-1;
 
 char log_socket_name[MAXSOCKETPATHLEN];
+char ld_preload_orig[MAXPATHLEN];
 
 void __doconnect(){
   if(strlen(log_socket_name)>=MAXSOCKETPATHLEN) {
@@ -104,8 +105,16 @@ void _init() {
 	fprintf(stderr,"Unable to create a unix-socket %s: socket name is too long,exiting\n", log_socket_name);
 	exit(1);
   }
+  
   strcpy(log_socket_name,log_socket_env);
 
+  if(getenv("LD_PRELOAD")==NULL) {
+	fprintf(stderr,"Unable to find LD_PRELOAD environment variable. "
+	"Library will load only with this variable defined");
+	exit(1);
+  }
+
+  strcpy(ld_preload_orig,getenv("LD_PRELOAD"));
 
   _open = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open");
   _open64 = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open64");
@@ -247,8 +256,8 @@ int open(const char * path, int flags, mode_t mode) {
 	realpath(path,fullpath);
 	char *stage=__get_stage();
 	if(! __is_event_allowed("open",fullpath,stage)) {
-	  errno=2; // not found
 	  __log_event("open",fullpath,"DENIED",errno,stage);
+	  errno=2; // not found
 	  return -1;
 	}
 	
@@ -270,8 +279,8 @@ int open64(const char * path, int flags, mode_t mode) {
 	realpath(path,fullpath);
 	char *stage=__get_stage();
 	if(! __is_event_allowed("open",fullpath,stage)) {
-	  errno=2; // not found
 	  __log_event("open",path,"DENIED",errno,stage);
+	  errno=2; // not found
 	  return -1;
 	}
 	
@@ -294,8 +303,8 @@ FILE *fopen(const char *path, const char *mode) {
 
 	char *stage=__get_stage();
 	if(! __is_event_allowed("open",fullpath,stage)) {
-	  errno=2; // not found
 	  __log_event("open",path,"DENIED",errno,stage);
+	  errno=2; // not found
 	  return NULL;
 	}
 
@@ -316,8 +325,8 @@ FILE *fopen64(const char *path, const char *mode) {
 
 	char *stage=__get_stage();
 	if(! __is_event_allowed("open",fullpath,stage)) {
-	  errno=2; // not found
 	  __log_event("open",fullpath,"DENIED",errno,stage);
+	  errno=2; // not found
 	  return NULL;
 	}
 
@@ -346,6 +355,9 @@ ssize_t read(int fd, void *buf, size_t count){
 	else
 	  __log_event("read",fullpath,"OK",0,stage);
   }
+  
+  //__log_event("debug",fullpath,"ERR",getpid(),stage);
+
   errno=saved_errno;
   return ret;
 }
@@ -372,7 +384,8 @@ pid_t fork(void) {
 
   //int succ=
   _setenv("LOG_SOCKET",log_socket_name,1);
-  
+  _setenv("LD_PRELOAD",ld_preload_orig,1);
+  //ld_preload_orig
   //fprintf(stderr,"prefork %s%p%p%d %s\n",getenv("LOG_SOCKET"),_setenv,setenv,succ,log_socket_orig);
 
   int ret=_fork();
@@ -407,14 +420,14 @@ int execve(const char *filename, char *const argv[],
   int i;
   for(i=0;envp[i];i++){
 	if(strncmp(envp[i],"LD_PRELOAD=",11)==0)
-	  if(strcmp(envp[i]+11,getenv("LD_PRELOAD"))==0) 
+	  if(strcmp(envp[i]+11,ld_preload_orig)==0) 
 		ld_preload_valid=1;
 	if(strncmp(envp[i],"LOG_SOCKET=",11)==0)
 	  if(strcmp(envp[i]+11,log_socket_name)==0) 
 		log_socket_valid=1;
   }
   if(!ld_preload_valid || !log_socket_valid) {
-	snprintf(new_ld_preload,MAXENVITEMSIZE,"LD_PRELOAD=%s",getenv("LD_PRELOAD"));
+	snprintf(new_ld_preload,MAXENVITEMSIZE,"LD_PRELOAD=%s",ld_preload_orig);
 	snprintf(new_log_socket,MAXENVITEMSIZE,"LOG_SOCKET=%s",log_socket_name);
 	for(i=0; envp[i] && i<MAXENVSIZE-3; i++) {
 	  if(strncmp(envp[i],"LD_PRELOAD=",11)==0) {

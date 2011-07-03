@@ -9,23 +9,30 @@ import logfs.fstracer
 import logfs.portage_utils
 
 args_parser=optparse.OptionParser("%prog [options] <command>")
+args_parser.add_option("-b", "--block",action="store", type="string", 
+  dest="packages", default="", help="block an access to files from this packages")
 args_parser.add_option("-v", action="store_true", dest="verbose", 
   default=False, help="show accessed files")
 args_parser.add_option("-u", "--unknown", action="store_true", dest="show_unknown_stage", 
   default=False, help="show unknown stage")
-args_parser.add_option("-b", "--block",action="store", type="string", 
-  dest="packages", default="", help="block an access to files from this packages")
+
+args_parser.add_option("--hooklib",action="store_const", dest="approach", 
+  const="hooklib", help="use ld_preload logging approach(default)")
+args_parser.add_option("--fusefs",action="store_const", dest="approach", 
+  const="fusefs", help="use fuse logging approach(slow, but reliable)")
+args_parser.set_defaults(approach="hooklib")
+
 args_parser.epilog="Example: %s -b lsof,cowsay emerge bash" % (os.path.basename(sys.argv[0]))
 
 args_parser.disable_interspersed_args()
 
 (options, args) = args_parser.parse_args()
+#print options
+#print args
 
 if len(args)==0:
   args_parser.print_help()
   exit(1) 
-#print args
-#print options
 
 filter_function=lambda eventname,filename,stage: True
 
@@ -45,7 +52,7 @@ if options.packages:
 	return not filename in files_to_block
   filter_function=filter
 
-events=logfs.fstracer.getfsevents(args[0], args,approach="fusefs",filterproc=filter_function)
+events=logfs.fstracer.getfsevents(args[0], args,approach=options.approach,filterproc=filter_function)
 print "Program finished, analyzing dependencies"
 
 # get unique filenames
@@ -114,7 +121,15 @@ for stage in sorted(events):
 	filesinfo[filename]["notfound"]=fail_events[filename]
 
 #print events_converted_for_output
-	  
+
+# explicit check for launching with non-emerge application
+was_emerge_process=False
+for package in packagesinfo:
+  if len(packagesinfo[package].keys())>1:
+	was_emerge_process=True
+	break
+
+# generating output
 stagesorder={"clean":1,"setup":2,"unpack":3,"prepare":4,"configure":5,"compile":6,"test":7,
 			 "install":8,"preinst":9,"postinst":10,"prerm":11,"postrm":12,"unknown":13}
 
@@ -126,7 +141,7 @@ for package in sorted(packagesinfo):
   
   stages=[]
   for stage in sorted(packagesinfo[package].keys(), key=stagesorder.get):
-	if stage!="unknown" or options.show_unknown_stage:
+	if stage!="unknown" or options.show_unknown_stage or not was_emerge_process:
 	  stages.append(stage)
 
   if len(stages)!=0:
@@ -159,7 +174,7 @@ for package in sorted(packagesinfo):
   
 """
 for stage in sorted(events, key=stagesorder.get):
-  succ_events=events[stage][0]-
+  succ_events=events[stage][0]
   fail_events=events[stage][1]
   print "On stage %s:" % stage
   for filename in sorted(succ_events, key=file_to_package.get):
