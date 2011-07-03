@@ -8,19 +8,44 @@ import sys
 import logfs.fstracer
 import logfs.portage_utils
 
-#logfs.fstracer.getfsevents("/bin/sh", ["sh" , "-c", "/usr/bin/tac bay_success; /usr/bin/tac bay_god bay_god2"])
-#events=logfs.fstracer.getfsevents("/bin/cat", ["cat" , "l l l"])
-#if len(sys.argv)<2:
-#  print "Usage: showfsevents.py <command>"
-#  exit(1)
-  
 args_parser=optparse.OptionParser("%prog [options] <command>")
-args_parser.add_option("-v", action="store_true", dest="verbose", default=False, help="show accessed files")
+args_parser.add_option("-v", action="store_true", dest="verbose", 
+  default=False, help="show accessed files")
+args_parser.add_option("-u", "--unknown", action="store_true", dest="show_unknown_stage", 
+  default=False, help="show unknown stage")
+args_parser.add_option("-b", "--block",action="store", type="string", 
+  dest="packages", default="", help="block an access to files from this packages")
+args_parser.epilog="Example: %s -b lsof,cowsay emerge bash" % (os.path.basename(sys.argv[0]))
+
+args_parser.disable_interspersed_args()
 
 (options, args) = args_parser.parse_args()
-print args
 
-events=logfs.fstracer.getfsevents(args[0], args,approach="hooklib")
+if len(args)==0:
+  args_parser.print_help()
+  exit(1) 
+#print args
+#print options
+
+filter_function=lambda eventname,filename,stage: True
+
+# handling --block
+if options.packages:
+  packages=options.packages.split(",")
+  files_to_block=[]
+  for package in packages:
+	files_in_package=logfs.portage_utils.getfilesbypackage(package)
+	if len(files_in_package)==0:
+	  print "Bad package name: %s. Exiting" % package
+	  exit(1)
+	files_to_block+=files_in_package
+  files_to_block={}.fromkeys(files_to_block)
+  # new filter function
+  def filter(eventname,filename,stage):
+	return not filename in files_to_block
+  filter_function=filter
+
+events=logfs.fstracer.getfsevents(args[0], args,approach="fusefs",filterproc=filter_function)
 print "Program finished, analyzing dependencies"
 
 # get unique filenames
@@ -29,9 +54,9 @@ for stage in events:
   succ_events=events[stage][0]
   fail_events=events[stage][1]
   for filename in succ_events:
-	filenames[filename]=""
+	filenames[filename]=None
   for filename in fail_events:
-	filenames[filename]=""
+	filenames[filename]=None
 filenames=filenames.keys();
 
 # temporary disabled
@@ -39,8 +64,8 @@ file_to_package=logfs.portage_utils.getpackagesbyfiles(filenames)
 #file_to_package={}
 #print events
 
-# this part is completly unreadable. It converting one complex struct(returned with getfsevents) to
-# another which good for user
+# this part is completly unreadable. It converting one complex struct(returned by getfsevents) to
+# another complex struct which good for generating output
 
 events_converted_for_output={}
 packagesinfo={}
@@ -95,12 +120,46 @@ stagesorder={"clean":1,"setup":2,"unpack":3,"prepare":4,"configure":5,"compile":
 
 	  
 for package in sorted(packagesinfo):
-  print "%-40s: %s"%(package,packagesinfo[package].keys())
+  # not showing special directory package
+  if package=="directory":
+	continue
+  
+  stages=[]
+  for stage in sorted(packagesinfo[package].keys(), key=stagesorder.get):
+	if stage!="unknown" or options.show_unknown_stage:
+	  stages.append(stage)
+
+  if len(stages)!=0:
+	print "%-40s: %s"%(package,stages)
+	# show information about accessed files
+	if options.verbose:
+	  filenames={}
+	  for stage in stages:
+		for filename in packagesinfo[package][stage]:
+		  if len(packagesinfo[package][stage][filename]["found"])!=0:
+			was_readed,was_writed=packagesinfo[package][stage][filename]["found"]
+			if not filename in filenames:
+			  filenames[filename]=[was_readed,was_writed]
+			else:
+			  old_was_readed, old_was_writed=filenames[filename]
+			  filenames[filename]=[old_was_readed | was_readed, old_was_writed | was_writed ]
+			  
+	  for filename in filenames:
+		if filenames[filename]==[False,False]:
+		  action="accessed"
+		elif filenames[filename]==[True,False]:
+		  action="readed"
+		elif filenames[filename]==[False,True]:
+		  action="writed"
+		elif filenames[filename]==[True,True]:
+		  action="readed and writed"
+		print "  %-56s %-21s" % (filename,action)
+			  
 	
   
 """
 for stage in sorted(events, key=stagesorder.get):
-  succ_events=events[stage][0]
+  succ_events=events[stage][0]-
   fail_events=events[stage][1]
   print "On stage %s:" % stage
   for filename in sorted(succ_events, key=file_to_package.get):

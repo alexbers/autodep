@@ -393,7 +393,7 @@ pid_t fork(void) {
 int execve(const char *filename, char *const argv[],
                   char *const envp[]) {
   if(access(filename, F_OK)!=-1)
-	__log_event("open",filename,"OK",0,__get_stage());
+	__log_event("read",filename,"OK",0,__get_stage());
   else
 	__log_event("open",filename,"ERR",2,__get_stage());
   

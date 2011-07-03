@@ -39,3 +39,23 @@ def getpackagesbyfiles(files):
 	
 	
   return ret
+  
+def getfilesbypackage(packagename):
+  ret=[]
+  try:
+	proc=subprocess.Popen(['qlist']+['--nocolor',"--obj",packagename],
+	  stdout=subprocess.PIPE,stderr=subprocess.PIPE, 
+	  bufsize=4096)
+	
+	out,err=proc.communicate()
+	if err!=None and len(err)!=0 :
+	  print "Noncritical error while launch qlist: %s" % err;
+	
+	ret=out.split("\n")
+	if ret==['']:
+	  ret=[]
+  except OSError,e:
+	print "Error while launching qfile: %s" % e
+
+  return ret
+  

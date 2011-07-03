@@ -184,9 +184,11 @@ static int getenv_by_pid(pid_t pid, char *envname,char *result,int result_len) {
 */
 static char * getstagebypid(pid_t pid) {
   char stage[MAXSTAGELEN];
+  //log_event("",filename,result,err,stage);
   if(!getenv_by_pid(getparentpid(pid),"EBUILD_PHASE",stage,MAXSTAGELEN))
 	return "unknown";
 
+  
   // ugly, but memory allocation is not better
   // there is better way to write this, but this is fast
   int i;

@@ -98,8 +98,7 @@ def checkparent(parent,child):
 
 
 # default access filter. Allow acess to all files
-def defaultfilter(eventname, filename, pid):
-  
+def defaultfilter(eventname, filename, stage):
   return True
 
 # run the program and get file access events
@@ -201,7 +200,8 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 				continue
 			  
 			  message=record.split("\0")
-			  #print message
+			  #if message[3]!="unknown":
+				#print message
 			  
 			  try:
 				if message[4]=="ASKING":
@@ -263,8 +263,6 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 		if len(clients)==0 and iszombie(pid):
 		  break
 
-	  #print "\n\nRETURNING!!!!\n\n"
-  
 	  epoll.unregister(sock_listen.fileno())
 	  epoll.close()
 	  sock_listen.close()
