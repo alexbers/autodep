@@ -13,17 +13,17 @@ This is few notes mainly for myself.
 3. Format of events structure:
  [
   {
-   <stage of building>:{<filename>:[<was readed>,<was writed>]}
+   <stage of building>:{<filename>:(<was readed>,<was writed>)}
   },
   {
-   <stage of building>:{<filename>:[<was not found>,<was blocked>]}
+   <stage of building>:{<filename>:(<was not found>,<was blocked>)}
   }
  ]
 
 4. Format of converted events structure:
  {
-  packagesinfo: {
-   <package>: {
+#  packagesinfo: {
+   <package|unknown>: {
     stage: {
      <filename>:
       {found:[<was readed>,<was writed>],
@@ -32,12 +32,12 @@ This is few notes mainly for myself.
    }
   }
   
-  otherfilesinfo: {
-   stage:{
-    <filename>:
-	 {found:[<was readed>,<was writed>],
-	 notfound:[<was not found>,<was blocked>]}
-   }
-  }
+  #otherfilesinfo: {
+  # stage:{
+  #  <filename>:
+	# {found:[<was readed>,<was writed>],
+	# notfound:[<was not found>,<was blocked>]}
+   #}
+  #}
  }
 
