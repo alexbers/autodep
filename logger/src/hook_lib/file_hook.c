@@ -26,10 +26,11 @@
 #define MAXENVSIZE 65536
 #define MAXENVITEMSIZE 256
 
-#define MAXARGS 256
+#define MAXARGS 1024
 //extern int errorno;
 
 pthread_mutex_t socketblock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t envblock = PTHREAD_MUTEX_INITIALIZER;
 
 int (*_open)(const char * pathname, int flags, ...);
 int (*_open64)(const char * pathname, int flags, ...);
@@ -45,7 +46,6 @@ int (*_execv)(const char *path, char *const argv[]);
 int (*_execvp)(const char *file, char *const argv[]);
 int (*_execvpe)(const char *file, char *const argv[], char *const envp[]);
 
-//int (*_execl)(const char *path, const char *arg, ...);
 int (*_fexecve)(int fd, char *const argv[], char *const envp[]);
 
 
@@ -103,20 +103,20 @@ void __doreconnect() {
 
 // this fucnction executes when library is loaded
 void _init() {
-  char *log_socket_env=getenv("LOG_SOCKET");
+  char *log_socket_val=getenv("LOG_SOCKET");
   
-  if(log_socket_env==NULL) {
+  if(log_socket_val==NULL) {
 	fprintf(stderr,"LOG_SOCKET environment variable isn't defined."
 					"Are this library launched by server?\n");
 	exit(1);
   }
 
-  if(strlen(log_socket_env)>=MAXSOCKETPATHLEN) {
+  if(strlen(log_socket_val)>=MAXSOCKETPATHLEN) {
 	fprintf(stderr,"Unable to create a unix-socket %s: socket name is too long,exiting\n", log_socket_name);
 	exit(1);
   }
   
-  strcpy(log_socket_name,log_socket_env);
+  strcpy(log_socket_name,log_socket_val);
 
   if(getenv("LD_PRELOAD")==NULL) {
 	fprintf(stderr,"Unable to find LD_PRELOAD environment variable. "
@@ -142,8 +142,6 @@ void _init() {
   _execvp = (int (*)(const char *file, char *const argv[])) dlsym(RTLD_NEXT, "execvp");
   _execvpe = (int (*)(const char *file, char *const argv[], char *const envp[])) dlsym(RTLD_NEXT, "execvpe");
   
-  //_execl =(int (*)(const char *path, const char *arg, ...)) dlsym(RTLD_NEXT, "execl");
-
   _fexecve = (int (*)(int fd, char *const argv[], char *const envp[])) dlsym(RTLD_NEXT, "fexecve");
 
   _system = (int (*)(const char *command)) dlsym(RTLD_NEXT, "system");
@@ -284,37 +282,42 @@ void __fixenvp(char *const envp[], char *envp_new[]) {
   int ld_preload_valid=0;
   int log_socket_valid=0;
   int i;
-  for(i=0;envp[i];i++){
-	if(strncmp(envp[i],"LD_PRELOAD=",11)==0)
-	  if(strcmp(envp[i]+11,ld_preload_orig)==0) 
-		ld_preload_valid=1;
-	if(strncmp(envp[i],"LOG_SOCKET=",11)==0)
-	  if(strcmp(envp[i]+11,log_socket_name)==0) 
-		log_socket_valid=1;
+//  for(i=0;envp[i];i++){
+//	if(strncmp(envp[i],"LD_PRELOAD=",11)==0)
+//	  if(strcmp(envp[i]+11,ld_preload_orig)==0) 
+//		ld_preload_valid=1;
+//	if(strncmp(envp[i],"LOG_SOCKET=",11)==0)
+//	  if(strcmp(envp[i]+11,log_socket_name)==0) 
+//		log_socket_valid=1;
+//  }
+  for(i=0; envp[i] && i<MAXENVSIZE-3; i++) {
+//	if(strncmp(envp[i],"LD_PRELOAD=",11)==0) {
+	//  envp_new[i]=malloc(1);//ld_preload_env;
+	  //ld_preload_valid=1;
+//	} else if(strncmp(envp[i],"LOG_SOCKET=",11)==0) {
+	  //envp_new[i]=malloc(1);//log_socket_env;
+	  //log_socket_valid=1;
+//	} else {
+	envp_new[i]=envp[i];
+//	}
+	//envp_new[i]=envp[i];
+//	}
   }
-  if(!ld_preload_valid || !log_socket_valid) {
-	for(i=0; envp[i] && i<MAXENVSIZE-3; i++) {
-	  if(strncmp(envp[i],"LD_PRELOAD=",11)==0) {
-		envp_new[i]=ld_preload_env;
-		ld_preload_valid=1;
-	  } else if(strncmp(envp[i],"LOG_SOCKET=",11)==0) {
-		envp_new[i]=log_socket_env;
-		log_socket_valid=1;
-	  } else {
-		envp_new[i]=envp[i];
-	  }
-	}
 
-	if(!ld_preload_valid) {
-	  envp_new[i]=ld_preload_env;
-	  i++;
-	}
-	if(!log_socket_valid) {
-	  envp_new[i]=log_socket_env;
-	  i++;
-	}	
-	envp_new[i]=NULL;
-  }
+  //if(!ld_preload_valid) {
+	envp_new[i]=ld_preload_env;
+	i++;
+  //}
+  //if(!log_socket_valid) {
+	envp_new[i]=log_socket_env;
+	i++;
+  //}	
+  envp_new[i]=NULL;
+  
+  //envp_new[0]=NULL;
+  //envp_new[4]=ld_preload_env;
+  //envp_new[5]=log_socket_env;
+  
 }
   
 /*
@@ -468,6 +471,7 @@ pid_t fork(void) {
   return ret;
 }
 
+
 int execve(const char *filename, char *const argv[],
                   char *const envp[]) {
   char *stage=__get_stage();
@@ -498,14 +502,26 @@ int execv(const char *path, char *const argv[]){
 	return -1;
   }
 
-  __fixenv();
 
   if(access(path, F_OK)!=-1)
 	__log_event("read",path,"OK",0,stage);
   else
 	__log_event("open",path,"ERR",2,stage);
+
+  // we can't just call __fixenv() here, it is not thread-safely
+  char **old_env=__environ;
+  char **new_env;
+
+  new_env=malloc(MAXENVSIZE * sizeof(char *));
+  __fixenvp(__environ,new_env);
+  __environ=new_env;
+    
+  _execv(path,argv);
   
-  return _execv(path,argv);  
+  free(new_env);
+  __environ=old_env;
+  
+  return -1;
 }
 
 int execvp(const char *file, char *const argv[]){
@@ -526,10 +542,20 @@ int execvp(const char *file, char *const argv[]){
 	// TODO: may me repeat bash's PATH parsing logic here	
   }
 
-  __fixenv();
+  // we can't just call __fixenv() here, it is not thread-safely
+  char **old_env=__environ;
+  char **new_env;
 
+  new_env=malloc(MAXENVSIZE * sizeof(char *));
+  __fixenvp(__environ,new_env);
+  __environ=new_env;
+    
+  _execvp(file,argv);
   
-  return _execvp(file,argv);
+  free(new_env);
+  __environ=old_env;
+  
+  return -1;
 } 
 
 int execvpe(const char *file, char *const argv[],
@@ -566,13 +592,19 @@ int execl(const char *path, const char *arg, ...){
 	return -1;
   }
 
-  __fixenv();
-
   if(access(path, F_OK)!=-1)
 	__log_event("read",path,"OK",0,stage);
   else
 	__log_event("open",path,"ERR",2,stage);
-  
+
+  // we can't just call __fixenv() here, it is not thread-safely
+  char **old_env=__environ;
+  char **new_env;
+
+  new_env=malloc(MAXENVSIZE * sizeof(char *));
+  __fixenvp(__environ,new_env);
+  __environ=new_env;
+    
   va_list ap;
   char * argv[MAXARGS+1];
   int i=0;
@@ -584,7 +616,13 @@ int execl(const char *path, const char *arg, ...){
   }
   argv[i]=NULL;
   va_end(ap);
-  return _execv(path,argv);
+  
+  _execv(path,argv);
+
+  free(new_env);
+  __environ=old_env;
+  
+  return -1;
 }
 
 int execlp(const char *file, const char *arg, ...) {
@@ -603,7 +641,13 @@ int execlp(const char *file, const char *arg, ...) {
 	// TODO: may me repeat bash's PATH parsing logic here	
   }
 
-  __fixenv();
+  // we can't just call __fixenv() here, it is not thread-safely
+  char **old_env=__environ;
+  char **new_env;
+
+  new_env=malloc(MAXENVSIZE * sizeof(char *));
+  __fixenvp(__environ,new_env);
+  __environ=new_env;
 
   va_list ap;
   char * argv[MAXARGS+1];
@@ -617,7 +661,12 @@ int execlp(const char *file, const char *arg, ...) {
   argv[i]=NULL;
   va_end(ap);
 
-  return _execvp(file,argv);
+  _execvp(file,argv);
+  free(new_env);
+  __environ=old_env;
+  
+  return -1;
+
 }
 
 int execle(const char *path, const char *arg, ... ){
@@ -651,52 +700,38 @@ int execle(const char *path, const char *arg, ... ){
   return _execve(path,argv,envp_new);
 }
 
-
-
-/*
 int fexecve(int fd, char *const argv[], char *const envp[]) {
-	fprintf(stderr,"fexecuting pid=%d",getpid());
-	fflush(stderr);
+  char *stage=__get_stage();
 
-	int ret=_fexecve(fd, argv, envp);
-	return ret;
+  char *envp_new[MAXENVSIZE];
+  __fixenvp(envp,envp_new);
+ 
+  char filename[MAXPATHLEN];
+  ssize_t path_size=__get_path_by_fd(fd,filename,MAXPATHLEN);
+  if(path_size==-1) 
+	return _fexecve(fd, argv, envp_new);
+  
+  if(! __is_event_allowed("open",filename,stage)) {
+	__log_event("open",filename,"DENIED",errno,stage);
+	errno=2; // not found
+	return -1;
+  }
+
+  if(access(filename, F_OK)!=-1)
+	__log_event("read",filename,"OK",0,stage);
+  else
+	__log_event("open",filename,"ERR",2,stage);
+	
+  return _fexecve(fd, argv, envp_new);
 }
-
-int execle(const char *path, const char *arg, ...) {
-	fprintf(stderr,"fexecluting pid=%d",getpid());
-	fflush(stderr);
-//
-	return 0;
-}
-
-
-
-
-
-
-int execlp(const char *file, const char *arg, ...){
-	fprintf(stderr,"execlpeting 1 pid=%d",getpid());
-	fflush(stderr);
-//
-	return 0;  
-}
-
-int rexec(char **ahost, int inport, char *user,
-                 char *passwd, char *cmd, int *fd2p){
- 	fprintf(stderr,"rexec 1 pid=%d",getpid());
-	fflush(stderr);
-//
-	return 0;  
-} 
 
 int system(const char *command) {
- 	fprintf(stderr,"rexec 1 pid=%d cmd=%s",getpid(),command);
-	fflush(stderr);
-
-	return _system(command);
-	return 0;  
+  __fixenv();
+	
+  int ret=_system(command);
   
-}*/
+  return ret;
+}
 
 
 
