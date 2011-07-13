@@ -15,6 +15,7 @@
 #include <bits/fcntl.h>
 
 #include <bits/stat.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -41,14 +42,16 @@ ssize_t (*_write)(int fd, const void *buf, size_t count);
 size_t (*_fread)(void *ptr, size_t size, size_t nmemb, FILE *stream);
 size_t (*_fwrite)(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 
+void *(*_mmap)(void *addr, size_t length, int prot, int flags,
+                  int fd, off_t offset);
+
+
 int (*_execve)(const char *filename, char *const argv[],char *const envp[]);
 int (*_execv)(const char *path, char *const argv[]);
 int (*_execvp)(const char *file, char *const argv[]);
 int (*_execvpe)(const char *file, char *const argv[], char *const envp[]);
 
 int (*_fexecve)(int fd, char *const argv[], char *const envp[]);
-
-
 
 int (*_system)(const char *command);
 
@@ -134,6 +137,10 @@ void _init() {
 
   _read= (ssize_t (*)(int fd, void *buf, size_t count)) dlsym(RTLD_NEXT, "read");
   _write= (ssize_t (*)(int fd, const void *buf, size_t count)) dlsym(RTLD_NEXT, "write");
+
+  _mmap=(void* (*)(void *addr, size_t length, int prot, int flags,
+                  int fd, off_t offset)) dlsym(RTLD_NEXT, "mmap");
+
   
   _fork = (pid_t (*)()) dlsym(RTLD_NEXT, "fork");
   
@@ -153,7 +160,7 @@ void _init() {
   
   if(_open==NULL || _open64==NULL || 
 	 _fopen==NULL || _fopen64==NULL || 
-	  _read==NULL || _write==NULL ||
+	  _read==NULL || _write==NULL || _mmap==NULL ||
 	  _fork==NULL || 
 	  _execve==NULL || _execv==NULL || _execvp==NULL || _execvpe==NULL || 
 	  _fexecve==NULL || _system==NULL || _setenv==NULL || _close==NULL) {
@@ -266,8 +273,6 @@ static int __is_event_allowed(const char *event_type,const char *filename, char*
   return 0;
 }
 
-
-
 void __fixenv() {
   _setenv("LOG_SOCKET",log_socket_name,1);
   _setenv("LD_PRELOAD",ld_preload_orig,1);
@@ -279,45 +284,19 @@ void __fixenv() {
  * Fixes LD_PRELOAD and LOG_SOCKET in envp and puts modified value in envp_new
 */
 void __fixenvp(char *const envp[], char *envp_new[]) {
-  int ld_preload_valid=0;
-  int log_socket_valid=0;
   int i;
-//  for(i=0;envp[i];i++){
-//	if(strncmp(envp[i],"LD_PRELOAD=",11)==0)
-//	  if(strcmp(envp[i]+11,ld_preload_orig)==0) 
-//		ld_preload_valid=1;
-//	if(strncmp(envp[i],"LOG_SOCKET=",11)==0)
-//	  if(strcmp(envp[i]+11,log_socket_name)==0) 
-//		log_socket_valid=1;
-//  }
+  int j=0;
   for(i=0; envp[i] && i<MAXENVSIZE-3; i++) {
-//	if(strncmp(envp[i],"LD_PRELOAD=",11)==0) {
-	//  envp_new[i]=malloc(1);//ld_preload_env;
-	  //ld_preload_valid=1;
-//	} else if(strncmp(envp[i],"LOG_SOCKET=",11)==0) {
-	  //envp_new[i]=malloc(1);//log_socket_env;
-	  //log_socket_valid=1;
-//	} else {
-	envp_new[i]=envp[i];
-//	}
-	//envp_new[i]=envp[i];
-//	}
+	if(strncmp(envp[i],"LD_PRELOAD=",11)==0)
+	  continue;
+	if(strncmp(envp[i],"LOG_SOCKET=",11)==0)
+	  continue;
+	envp_new[j++]=envp[i];
   }
 
-  //if(!ld_preload_valid) {
-	envp_new[i]=ld_preload_env;
-	i++;
-  //}
-  //if(!log_socket_valid) {
-	envp_new[i]=log_socket_env;
-	i++;
-  //}	
-  envp_new[i]=NULL;
-  
-  //envp_new[0]=NULL;
-  //envp_new[4]=ld_preload_env;
-  //envp_new[5]=log_socket_env;
-  
+  envp_new[j++]=ld_preload_env;
+  envp_new[j++]=log_socket_env;
+  envp_new[j]=NULL;
 }
   
 /*
@@ -733,7 +712,19 @@ int system(const char *command) {
   return ret;
 }
 
-
+void *mmap(void *addr, size_t length, int prot, int flags,
+                  int fd, off_t offset) {
+  void *ret=_mmap(addr,length,prot,flags,fd,offset);
+  char filename[MAXPATHLEN];
+  if(fd!=-1 && __get_path_by_fd(fd,filename,MAXPATHLEN)!=-1) {
+	char *stage=__get_stage();
+	if(prot & PROT_READ || prot & PROT_EXEC)
+	  __log_event("read",filename,"OK",0,stage);
+	if(prot & PROT_WRITE)
+	  __log_event("write",filename,"OK",0,stage);
+  }
+  return ret;
+}
 
 int setenv(const char *name, const char *value, int overwrite) {
 	//printf ("   CHANGING name: %s, value: %s",name,value);
