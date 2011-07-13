@@ -151,7 +151,8 @@ def getfsevents(prog_name,arguments,approach="hooklib",filterproc=defaultfilter)
 		  print "Sending SIGKILL to child"
 		  os.kill(pid,signal.SIGKILL)
 		  os._exit(1)
-	  global signal
+	  import signal # signal must to be in this scope
+	  # global signal not works
  	  signal.signal(signal.SIGINT, signal_handler)
  	  
 	  epoll=select.epoll()

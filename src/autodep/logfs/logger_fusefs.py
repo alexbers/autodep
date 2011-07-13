@@ -50,7 +50,7 @@ class logger:
 	os.environ["PARENT_PID"]=str(self.currpid)
 
 	# TODO: change
-	ret=subprocess.call(['/home/bay/gsoc/logger/src/hook_fusefs/hookfs',self.rootmountpath,
+	ret=subprocess.call(['/home/bay/gsoc/src/hook_fusefs/hookfs',self.rootmountpath,
 						 '-o','allow_other,suid'])
 	if ret!=0:
 	  print "failed to launch FUSE logger. Check messages above"

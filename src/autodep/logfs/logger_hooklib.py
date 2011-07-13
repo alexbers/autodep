@@ -5,7 +5,7 @@ import sys
 
 class logger:
   socketname=''
-  hooklibpath='/home/bay/gsoc/logger/src/hook_lib/file_hook.so' # TODO: change
+  hooklibpath='/home/bay/gsoc/src/hook_lib/file_hook.so' # TODO: change
   
   def __init__(self,socketname):
 	self.socketname=socketname
