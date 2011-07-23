@@ -6,8 +6,6 @@ import os
 import sys
 import signal
 
-
-
 class logger:
   socketname=''
   readytolaunch=False

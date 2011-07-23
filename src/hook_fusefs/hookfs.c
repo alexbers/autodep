@@ -246,6 +246,9 @@ static int is_process_external(pid_t pid) {
   return 1;
 }
 
+/*
+ * Send an event to python part 
+*/
 static void raw_log_event(const char *event_type, const char *filename, char *result,int err, char* stage) {
   char msg_buff[MAXSOCKETMSGLEN];
   int bytes_to_send;

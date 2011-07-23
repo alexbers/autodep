@@ -31,7 +31,6 @@
 //extern int errorno;
 
 pthread_mutex_t socketblock = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t envblock = PTHREAD_MUTEX_INITIALIZER;
 
 int (*_open)(const char * pathname, int flags, ...);
 int (*_open64)(const char * pathname, int flags, ...);
@@ -590,7 +589,8 @@ int execl(const char *path, const char *arg, ...){
   
   va_start(ap,arg);
   while(arg!=0 && i<MAXARGS) {
-	argv[i++]=arg;
+	argv[i]=(char *)arg;
+	i++;
 	arg=va_arg(ap,const char *);
   }
   argv[i]=NULL;
@@ -634,7 +634,8 @@ int execlp(const char *file, const char *arg, ...) {
   
   va_start(ap,arg);
   while(arg!=0 && i<MAXARGS) {
-	argv[i++]=arg;
+	argv[i]=(char *)arg;
+	i++;
 	arg=va_arg(ap,const char *);
   }
   argv[i]=NULL;
@@ -663,14 +664,14 @@ int execle(const char *path, const char *arg, ... ){
   
   va_list ap;
   char * argv[MAXARGS+1];
-  argv[0]=arg;
+  argv[0]=(char *)arg;
   
   va_start(ap,arg);
   int i=0;
   while(argv[i++]!=NULL && i<MAXARGS) {
-	argv[i]=va_arg(ap,const char *);
+	argv[i]=(char *)va_arg(ap,const char *);
   }
-  char *const *envp=va_arg(ap, const char *const *);
+  char **envp=(char **) va_arg(ap, const char *);
   
   char *envp_new[MAXENVSIZE];
   __fixenvp(envp,envp_new);
